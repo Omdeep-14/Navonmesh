@@ -162,7 +162,7 @@ const getEmailSubject = (type) => {
   return subjects[type] || `a message from mendi 💛`;
 };
 
-// ── Mood accent for email ────────────────────────────────────
+// ── Mood accent for email ─────────────────────────────────────
 const getMoodAccent = (moodLabel) => {
   const accents = {
     happy: { from: "#f59e0b", to: "#ef4444", text: "#fbbf24" },
@@ -175,10 +175,9 @@ const getMoodAccent = (moodLabel) => {
   return accents[moodLabel] || accents.okay;
 };
 
-// ── Styled HTML email template ────────────────────────────────
+// ── Styled HTML email — matches night recommendation layout ───
 const buildEmailHtml = (userName, messageText, type, checkinId, moodLabel) => {
   const appUrl = process.env.APP_URL || "http://localhost:5173";
-  // ── Reply URL carries checkin + type context ──
   const replyUrl = `${appUrl}/home?reply=${checkinId}&type=${type}`;
   const accent = getMoodAccent(moodLabel);
 
@@ -189,8 +188,15 @@ const buildEmailHtml = (userName, messageText, type, checkinId, moodLabel) => {
   };
   const headerEmoji = emojiMap[type] || "💛";
 
+  const taglineMap = {
+    event_followup: "just checking in on that thing",
+    evening_checkin: "a quick hello from mendi",
+    night_checkin: "checking in before you sleep",
+  };
+  const tagline = taglineMap[type] || "a message from mendi";
+
   const labelMap = {
-    event_followup: "following up",
+    event_followup: "follow-up",
     evening_checkin: "evening check-in",
     night_checkin: "night check-in",
   };
@@ -235,7 +241,7 @@ const buildEmailHtml = (userName, messageText, type, checkinId, moodLabel) => {
                         <div style="width:42px;height:42px;background:linear-gradient(135deg,${accent.from},${accent.to});border-radius:13px;text-align:center;line-height:42px;font-size:19px;display:inline-block;">${headerEmoji}</div>
                       </td>
                       <td style="padding-left:14px;vertical-align:top;">
-                        <p style="margin:0 0 3px;color:#e2e8f0;font-size:17px;font-weight:700;letter-spacing:-0.2px;">hey ${userName}</p>
+                        <p style="margin:0 0 3px;color:#e2e8f0;font-size:17px;font-weight:700;letter-spacing:-0.2px;">${tagline}</p>
                         <p style="margin:0;color:#334155;font-size:12px;letter-spacing:0.2px;">${label} from mendi</p>
                       </td>
                     </tr>
@@ -249,11 +255,16 @@ const buildEmailHtml = (userName, messageText, type, checkinId, moodLabel) => {
               <tr><td style="padding:0 44px;"><div style="height:1px;background:#131c2e;"></div></td></tr>
             </table>
 
-            <!-- message -->
+            <!-- greeting + message (matches night rec layout) -->
             <table width="100%" cellpadding="0" cellspacing="0">
               <tr>
-                <td style="padding:32px 44px 36px;">
-                  <p style="margin:0;color:#94a3b8;font-size:17px;line-height:1.85;">${messageText}</p>
+                <td style="padding:32px 44px 6px;">
+                  <p style="margin:0;color:#334155;font-size:11px;font-weight:700;letter-spacing:2.5px;text-transform:uppercase;">hey ${userName}</p>
+                </td>
+              </tr>
+              <tr>
+                <td style="padding:12px 44px 36px;">
+                  <p style="margin:0;color:#94a3b8;font-size:16px;line-height:1.9;">${messageText}</p>
                 </td>
               </tr>
             </table>
@@ -382,8 +393,8 @@ const processScheduledMessages = async () => {
           user.name,
           messageText,
           scheduledMsg.message_type,
-          checkin.id, // ← checkinId for reply URL
-          checkin.mood_label, // ← mood for accent color
+          checkin.id,
+          checkin.mood_label,
         ),
       });
 

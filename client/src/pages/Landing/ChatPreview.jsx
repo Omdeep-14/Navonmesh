@@ -1,22 +1,16 @@
 const ChatPreview = () => (
   <section className="max-w-2xl mx-auto px-8 pb-32" style={{ position: "relative", zIndex: 10 }}>
-    <div
-      style={{
-        background: "rgba(15, 23, 42, 0.75)",
-        backdropFilter: "blur(20px)",
-        WebkitBackdropFilter: "blur(20px)",
-        border: "1px solid rgba(255,255,255,0.08)",
-        borderRadius: "1.5rem",
-        padding: "1.5rem",
-        boxShadow: "0 8px 40px rgba(0,0,0,0.5)",
-      }}
-    >
+    <div style={{
+      background: "rgba(15, 23, 42, 0.75)", backdropFilter: "blur(20px)",
+      WebkitBackdropFilter: "blur(20px)", border: "1px solid rgba(255,255,255,0.08)",
+      borderRadius: "1.5rem", padding: "1.5rem", boxShadow: "0 8px 40px rgba(0,0,0,0.5)",
+    }}>
       <div className="flex items-center gap-3 mb-6 pb-4" style={{ borderBottom: "1px solid rgba(255,255,255,0.07)" }}>
         <div className="w-10 h-10 rounded-full flex items-center justify-center text-lg" style={{ background: "linear-gradient(135deg, #fbbf24, #fb7185)" }}>
           🌙
         </div>
         <div>
-          <p className="text-white font-medium text-sm">Mendi</p>
+          <p className="text-white font-medium text-sm">Sahaay</p>
           <p className="text-emerald-400 text-xs">● Online</p>
         </div>
       </div>
@@ -54,7 +48,7 @@ const ChatPreview = () => (
         <div className="flex-1 px-4 py-2.5 text-slate-500 text-sm rounded-full" style={{ background: "rgba(255,255,255,0.04)", border: "1px solid rgba(255,255,255,0.07)" }}>
           Type how you're feeling...
         </div>
-        <button className="w-10 h-10 rounded-full flex items-center justify-center text-slate-900 font-bold transition-all hover:scale-110 hover:shadow-lg" style={{ background: "linear-gradient(135deg, #fbbf24, #fb7185)" }}>
+        <button className="w-10 h-10 rounded-full flex items-center justify-center text-slate-900 font-bold transition-all hover:scale-110" style={{ background: "linear-gradient(135deg, #fbbf24, #fb7185)" }}>
           →
         </button>
       </div>

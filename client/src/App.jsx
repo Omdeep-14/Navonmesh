@@ -16,13 +16,10 @@ export default function App() {
     if (token) setPage("home");
   }, []);
 
-  // Video plays on pre-login pages only — but it is NEVER unmounted
-  // so the playback position never resets when switching between pages
   const showVideo = page === "landing" || page === "login" || page === "signup";
 
   return (
     <div style={{ position: "relative", minHeight: "100vh" }}>
-      {/* ─── Single persistent video — lives here, never in child pages ─── */}
       <video
         ref={videoRef}
         autoPlay

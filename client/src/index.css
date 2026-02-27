@@ -51,20 +51,11 @@ body {
 }
 
 /* Size variants */
-.mendi-btn-sm {
-  font-size: 0.78rem;
-  padding: 0.45em 1.3em;
-}
-.mendi-btn-lg {
-  font-size: 1.05rem;
-  padding: 0.7em 2.2em;
-}
-.mendi-btn-xl {
-  font-size: 1.15rem;
-  padding: 0.8em 2.8em;
-}
+.mendi-btn-sm { font-size: 0.78rem; padding: 0.45em 1.3em; }
+.mendi-btn-lg { font-size: 1.05rem; padding: 0.7em 2.2em; }
+.mendi-btn-xl { font-size: 1.15rem; padding: 0.8em 2.8em; }
 
-/* Colour variants — just set --btn-color */
+/* Colour variants */
 .mendi-btn-amber  { --btn-color: #fbbf24; }
 .mendi-btn-rose   { --btn-color: #fb7185; }
 .mendi-btn-green  { --btn-color: #34d399; }
@@ -72,10 +63,7 @@ body {
 .mendi-btn-red    { --btn-color: #f87171; }
 
 /* Full-width form button */
-.mendi-btn-block {
-  width: 100%;
-  display: flex;
-}
+.mendi-btn-block { width: 100%; display: flex; }
 
 /* ============================================
    GLASSMORPHIC CARD
@@ -100,16 +88,12 @@ body {
   -webkit-backdrop-filter: blur(28px);
   border: 1px solid rgba(255, 255, 255, 0.10);
   border-radius: 1.5rem;
-  box-shadow:
-    0 8px 32px rgba(0, 0, 0, 0.45),
-    inset 0 1px 0 rgba(255, 255, 255, 0.07);
+  box-shadow: 0 8px 32px rgba(0, 0, 0, 0.45), inset 0 1px 0 rgba(255, 255, 255, 0.07);
   transition: transform 300ms ease, box-shadow 300ms ease;
 }
 .feature-card:hover {
   transform: translateY(-6px);
-  box-shadow:
-    0 20px 48px rgba(0, 0, 0, 0.55),
-    inset 0 1px 0 rgba(255, 255, 255, 0.1);
+  box-shadow: 0 20px 48px rgba(0, 0, 0, 0.55), inset 0 1px 0 rgba(255, 255, 255, 0.1);
 }
 .feature-card-img {
   width: 100%;

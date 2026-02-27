@@ -2,13 +2,12 @@ import FloatingOrb from "../../components/shared/FloatingOrb";
 import SahaayLogo from "../../components/shared/SahaayLogo";
 import HeroSection from "./HeroSection";
 import FeaturesSection from "./FeaturesSection";
-import HowItWorksSection from "./HowItWorksSection";
+import HowItWorksSection from "./Howitworkssection";
 import CTASection from "./CTASection";
 
 function Landing({ onNavigate }) {
   return (
     <div className="min-h-screen text-white overflow-x-hidden" style={{ position: "relative" }}>
-      {/* Overlay on top of the persistent video in App.jsx */}
       <div style={{ position: "fixed", inset: 0, background: "rgba(8,12,25,0.62)", zIndex: 1 }} />
 
       <FloatingOrb className="w-96 h-96 bg-amber-500 top-0 -left-48" />
@@ -22,16 +21,10 @@ function Landing({ onNavigate }) {
           <span className="text-xl font-bold font-serif text-amber-300">Sahaay</span>
         </div>
         <div className="flex items-center gap-3">
-          <button
-            onClick={() => onNavigate("login")}
-            className="mendi-btn mendi-btn-slate mendi-btn-sm"
-          >
+          <button onClick={() => onNavigate("login")} className="mendi-btn mendi-btn-slate mendi-btn-sm">
             <span>Sign in</span>
           </button>
-          <button
-            onClick={() => onNavigate("signup")}
-            className="mendi-btn mendi-btn-amber mendi-btn-sm"
-          >
+          <button onClick={() => onNavigate("signup")} className="mendi-btn mendi-btn-amber mendi-btn-sm">
             <span>Get started</span>
           </button>
         </div>

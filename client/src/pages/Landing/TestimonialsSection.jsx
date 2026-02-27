@@ -17,7 +17,7 @@ const TestimonialsSection = () => (
         mood="☀️"
       />
       <TestimonialCard
-        quote="After a terrible day, Mendi suggested ordering from my favourite restaurant. I didn't know I needed that."
+        quote="After a terrible day, Sahaay suggested ordering from my favourite restaurant. I didn't know I needed that."
         name="Sneha, 22"
         mood="🌙"
       />

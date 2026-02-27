@@ -10,7 +10,7 @@ import genAiRouter from "./routes/genAi.routes.js";
 const PORT = process.env.PORT || 3000;
 const app = express();
 
-app.use(cors({ origin: "http://localhost:5173", credentials: true }));
+app.use(cors({ origin: process.env.FRONTEND_URL, credentials: true }));
 app.use(express.json()); // don't forget this or req.body will be undefined
 app.use("/api/v1/auth", authRouter);
 app.use("/api/v1/auth", genAiRouter);

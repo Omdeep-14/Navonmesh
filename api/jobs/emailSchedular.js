@@ -11,49 +11,100 @@ import {
 const llm = new ChatGroq({
   apiKey: process.env.GROQ_API_KEY,
   model: "llama-3.3-70b-versatile",
-  temperature: 0.8,
+  temperature: 0.9,
 });
 
 // ── Fetch conversation history ────────────────────────────────
 const getConversationHistory = async (userId, checkinId) => {
-  const { data } = await supabase
+  const { data, error } = await supabase
     .from("conversations")
     .select("role, message")
     .eq("user_id", userId)
     .eq("checkin_id", checkinId)
     .order("created_at", { ascending: true });
+
+  if (error) console.error("History fetch error:", error.message);
+  console.log(
+    `Fetched ${data?.length || 0} history messages for checkin ${checkinId}`,
+  );
   return data || [];
+};
+
+// ── Tone guide based on age ───────────────────────────────────
+const getToneForAge = (age) => {
+  if (!age) return "casual and warm";
+  if (age <= 15)
+    return "very casual, like a supportive older sibling. use simple words, maybe a light emoji or two";
+  if (age <= 22)
+    return "super casual, like a close college friend. can use slang lightly, keep it real and relatable";
+  if (age <= 35)
+    return "warm and casual, like a good friend who gets it. no fluff, just genuine";
+  if (age <= 55)
+    return "warm and grounded, like a thoughtful friend. calm and steady tone";
+  return "gentle and warm, like a caring old friend. simple and comforting";
 };
 
 // ── Generate proactive AI message ────────────────────────────
 const generateProactiveMessage = async (type, user, checkin, history) => {
+  const tone = getToneForAge(user.age);
+  const location = [user.area, user.city].filter(Boolean).join(", ");
+
+  // pull the first user message (their morning checkin) for context
+  const morningMessage = history.find((m) => m.role === "user")?.message || "";
+
+  // pull last few exchanges for tight context
+  const recentHistory = history.slice(-6);
+
+  const baseRules = `
+You are texting ${user.name} like a real friend — NOT a therapist, NOT an AI assistant.
+Tone: ${tone}.
+${location ? `They live in ${location} — only mention this if it genuinely flows naturally into the conversation, like 90% of messages should not mention location at all.` : ""}
+${user.age ? `They are ${user.age} years old.` : ""}
+
+STRICT RULES — if you break any of these the message fails:
+- Never say "I'm here for you", "you're not alone", "I'm so sorry to hear that", "sending love", "safe space", "it's okay to feel"
+- Never use phrases like "it sounds like", "I can imagine", "I understand how you feel"
+- Never start with "Hey ${user.name}" — just get straight to what you want to say
+- No bullet points, no lists, no paragraphs
+- Max 2 sentences — short like a real text message
+- Sound like a human who actually knows them, not a wellness app
+- Reference something specific from the conversation if possible`;
+
   const prompts = {
-    event_followup: `You are a warm mental health companion like a close friend.
-      The user's name is ${user.name}.
-      Earlier today they mentioned an event and seemed worried about it.
-      You are proactively checking in to see how it went.
-      Look at the conversation history to know what event they mentioned.
-      Write a short, warm, natural follow-up (1-2 sentences).
-      Don't say "I'm checking in" — just ask naturally like a friend would.`,
+    event_followup: `${baseRules}
 
-    evening_checkin: `You are a warm mental health companion like a close friend.
-      The user's name is ${user.name}.
-      They checked in this morning feeling ${checkin.mood_label}.
-      It's evening now. Reach out warmly to see how their day went.
-      Write a short, natural message (1-2 sentences).
-      Reference their morning mood naturally — don't be clinical.`,
+Context: This morning ${user.name} mentioned something they were stressed or nervous about.
+Morning message: "${morningMessage}"
+You want to casually ask how it went — like a friend who remembered and is genuinely curious.
+The message MUST end with a question — open ended, something they'd actually want to answer.
+NEVER end with a statement or motivation. Always a question.
+Example vibe: "yo how did that thing with your manager go??" or "wait how did the presentation go, tell me everything"
+Write the message:`,
 
-    night_checkin: `You are a warm mental health companion like a close friend.
-      The user's name is ${user.name}.
-      It's nighttime. They started the day feeling ${checkin.mood_label}.
-      Check in gently for the night. Be cozy and warm.
-      Write a short, caring message (1-2 sentences).`,
+    evening_checkin: `${baseRules}
+
+Context: ${user.name} started the day feeling ${checkin.mood_label}.
+Morning message: "${morningMessage}"
+It's evening. Ask them something real — make them want to open the app and reply.
+The message MUST end with a question — something open ended that invites them to talk.
+NEVER send motivation or advice. A friend asks, they don't lecture.
+Example vibe: "okay but how are you actually doing rn?" or "how did today end up going?"
+Write the message:`,
+
+    night_checkin: `${baseRules}
+
+Context: ${user.name} started the day feeling ${checkin.mood_label}.
+Morning message: "${morningMessage}"
+It's night. Check in gently — but still end with a question so they feel like replying.
+The message MUST end with a question. No motivational endings, no "you got this", no advice.
+Example vibe: "how was today in the end?" or "did things get any better after this morning?"
+Write the message:`,
   };
 
   const systemPrompt = prompts[type] || prompts.evening_checkin;
   const messages = [new SystemMessage(systemPrompt)];
 
-  history.forEach((msg) => {
+  recentHistory.forEach((msg) => {
     messages.push(
       msg.role === "user"
         ? new HumanMessage(msg.message)
@@ -61,28 +112,33 @@ const generateProactiveMessage = async (type, user, checkin, history) => {
     );
   });
 
+  console.log(
+    `Generating ${type} message for ${user.name} (age: ${user.age}, location: ${location})...`,
+  );
   const response = await llm.invoke(messages);
+  console.log("Generated message:", response.content);
   return response.content;
 };
 
 // ── Email subject lines per message type ─────────────────────
 const getEmailSubject = (type, userName) => {
   const subjects = {
-    event_followup: `Hey ${userName}, how did it go? 💬`,
-    evening_checkin: `Checking in on you this evening 🌇`,
-    night_checkin: `Hope your day went well 🌙`,
+    event_followup: `hey, how did it go? 👀`,
+    evening_checkin: `checking in on you ☀️`,
+    night_checkin: `hope today was good 🌙`,
   };
-  return subjects[type] || `A message from Mendi 💛`;
+  return subjects[type] || `a message from mendi 💛`;
 };
 
 // ── Styled HTML email template ────────────────────────────────
 const buildEmailHtml = (userName, messageText, type) => {
   const emojiMap = {
-    event_followup: "💬",
-    evening_checkin: "🌇",
+    event_followup: "👀",
+    evening_checkin: "☀️",
     night_checkin: "🌙",
   };
   const emoji = emojiMap[type] || "💛";
+  const appUrl = process.env.APP_URL || "http://localhost:5173";
 
   return `
     <!DOCTYPE html>
@@ -113,12 +169,11 @@ const buildEmailHtml = (userName, messageText, type) => {
                 </tr>
                 <tr>
                   <td style="padding:36px 40px;">
-                    <p style="color:#94a3b8;font-size:14px;margin:0 0 8px 0;text-transform:uppercase;letter-spacing:1px;">Hey ${userName}</p>
-                    <p style="color:#f1f5f9;font-size:18px;line-height:1.7;margin:0 0 28px 0;">${messageText}</p>
+                    <p style="color:#f1f5f9;font-size:20px;line-height:1.7;margin:0 0 28px 0;font-style:italic;">${messageText}</p>
                     <table cellpadding="0" cellspacing="0">
                       <tr>
                         <td style="background:linear-gradient(135deg,#fbbf24,#f87171);border-radius:10px;padding:1px;">
-                          <a href="${process.env.APP_URL}"
+                          <a href="${appUrl}/home"
                              style="display:inline-block;background:#1e293b;color:#fbbf24;text-decoration:none;font-size:14px;font-weight:600;padding:12px 28px;border-radius:9px;letter-spacing:0.3px;">
                             Reply to Mendi →
                           </a>
@@ -131,7 +186,7 @@ const buildEmailHtml = (userName, messageText, type) => {
                   <td style="padding:20px 40px 28px;border-top:1px solid #334155;">
                     <p style="color:#475569;font-size:12px;margin:0;line-height:1.6;">
                       You're receiving this because you checked in with Mendi today.<br/>
-                      <a href="${process.env.APP_URL}" style="color:#64748b;text-decoration:underline;">Open Mendi</a>
+                      <a href="${appUrl}/home" style="color:#64748b;text-decoration:underline;">Open Mendi</a>
                     </p>
                   </td>
                 </tr>
@@ -163,19 +218,25 @@ const processScheduledMessages = async () => {
     .eq("status", "pending")
     .lte("scheduled_for", now);
 
-  if (error || !dueMessages?.length) return;
+  if (error) {
+    console.error("Error fetching scheduled messages:", error.message);
+    return;
+  }
+  if (!dueMessages?.length) return;
 
   console.log(`Processing ${dueMessages.length} scheduled message(s)...`);
 
   for (const scheduledMsg of dueMessages) {
     try {
+      // fetch age, city, area alongside name and email
       const { data: user } = await supabase
         .from("users")
-        .select("name, email, city, area")
+        .select("name, email, age, city, area")
         .eq("id", scheduledMsg.user_id)
         .single();
 
       if (!user) {
+        console.warn(`No user found for id ${scheduledMsg.user_id}, skipping`);
         await supabase
           .from("scheduled_messages")
           .update({ status: "skipped" })
@@ -192,12 +253,17 @@ const processScheduledMessages = async () => {
         .single();
 
       if (!checkin) {
+        console.warn(
+          `No checkin found for user ${user.name} on ${today}, skipping`,
+        );
         await supabase
           .from("scheduled_messages")
           .update({ status: "skipped" })
           .eq("id", scheduledMsg.id);
         continue;
       }
+
+      console.log(`Checkin found: ${checkin.id}, mood: ${checkin.mood_label}`);
 
       const history = await getConversationHistory(
         scheduledMsg.user_id,
@@ -220,10 +286,6 @@ const processScheduledMessages = async () => {
         message_type: scheduledMsg.message_type,
       });
 
-      console.log("Attempting email to:", user.email);
-      console.log("SMTP_USER:", process.env.SMTP_USER);
-      console.log("SMTP_PASS:", process.env.SMTP_PASS ? "exists" : "UNDEFINED");
-
       // 2. send email
       await sendEmail(
         user.email,
@@ -242,14 +304,9 @@ const processScheduledMessages = async () => {
         `✓ Sent ${scheduledMsg.message_type} to ${user.name} (${user.email})`,
       );
     } catch (err) {
-      console.error(`✗ Full error:`, JSON.stringify(err, null, 2));
-      console.error(`✗ Error message:`, err.message);
-      console.error(`✗ Error stack:`, err.stack);
-      console.error(
-        `✗ Failed to process message ${scheduledMsg.id}:`,
-        err.message,
-      );
-      // stays 'pending' → retries next minute
+      console.error(`✗ Failed to process message ${scheduledMsg.id}:`);
+      console.error(`  Message: ${err.message}`);
+      console.error(`  Stack: ${err.stack}`);
     }
   }
 };

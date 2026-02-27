@@ -150,7 +150,6 @@ const MoodBadge = ({ mood }) => {
 // ── Chat Bubble ───────────────────────────────────────────────
 const ChatBubble = ({ msg, onOpenCBT }) => {
   const isUser = msg.role === "user";
-  // Don't render empty bubbles (can happen if scheduler message arrives before content is set)
   if (!msg.content && !msg.cbt && !msg.helpline) return null;
   return (
     <div className={`flex ${isUser ? "justify-end" : "justify-start"} mb-3`}>
@@ -809,15 +808,16 @@ export default function Home({ onNavigate }) {
   const [cbtOpen, setCbtOpen] = useState(false);
   const [checkinDate, setCheckinDate] = useState(
     new Date().toISOString().split("T")[0],
-  ); // virtual date for demo
+  );
   const bottomRef = useRef(null);
-  const deepLinkHandled = useRef(false); // ← guard against StrictMode double-mount
+  const deepLinkHandled = useRef(false);
+  // ── PATCH: cursor for poll so we never miss or double-fetch messages ──
+  const lastSeenRef = useRef(null);
 
   // ── Single mount effect: auth check + deep link handler ──
   useEffect(() => {
     const token = localStorage.getItem("token");
     if (!token) {
-      // Preserve email deep link so login can redirect back to it
       const currentParams = window.location.search;
       if (currentParams)
         sessionStorage.setItem("pendingDeepLink", currentParams);
@@ -825,10 +825,8 @@ export default function Home({ onNavigate }) {
       return;
     }
 
-    // Guard so StrictMode's second mount doesn't re-run after URL is already cleaned
     if (deepLinkHandled.current) return;
 
-    // Recover pending deep link from sessionStorage if present
     const rawParams =
       window.location.search || sessionStorage.getItem("pendingDeepLink") || "";
     sessionStorage.removeItem("pendingDeepLink");
@@ -840,7 +838,6 @@ export default function Home({ onNavigate }) {
     if (!replyCheckinId || !replyType) return;
 
     deepLinkHandled.current = true;
-    // Clean URL immediately so refresh doesn't re-trigger
     window.history.replaceState({}, "", "/home");
 
     const fetchReplyContext = async () => {
@@ -862,19 +859,22 @@ export default function Home({ onNavigate }) {
           timestamp: Date.now(),
         };
 
+        // Seed lastSeenRef so poll starts from now, not 30s ago
+        lastSeenRef.current = new Date().toISOString();
+
         setChatOpen(true);
         setActiveView("chat");
         setMessages([contextMsg]);
         setAllMessages((prev) => [...prev, contextMsg]);
       } catch (err) {
         console.error("fetchReplyContext failed:", err);
-        // fallback: open chat normally
         const welcome = {
           id: Date.now(),
           role: "assistant",
           timestamp: Date.now(),
           content: `${getGreeting()}, ${user?.name?.split(" ")[0] || "there"} 🌙 How are you feeling right now?`,
         };
+        lastSeenRef.current = new Date().toISOString();
         setChatOpen(true);
         setMessages([welcome]);
         setAllMessages((prev) => [...prev, welcome]);
@@ -893,32 +893,50 @@ export default function Home({ onNavigate }) {
     bottomRef.current?.scrollIntoView({ behavior: "smooth" });
   }, [messages, isTyping]);
 
-  // ── Poll for new assistant messages ──────────────────────
+  // ── Poll for new assistant messages ──────────────────────────
   const pollRef = useRef(null);
   pollRef.current = async () => {
     const token = localStorage.getItem("token");
-    const today = checkinDate; // use virtual date (advances in demo mode)
+    const today = checkinDate;
     try {
+      // ── PATCH: use last_seen cursor instead of fixed 30s window ──
+      const params = new URLSearchParams({ date: today });
+      if (lastSeenRef.current) {
+        params.append("last_seen", lastSeenRef.current);
+      }
+
       const res = await fetch(
-        `${import.meta.env.VITE_API_URL}/api/v1/chat/poll?date=${today}`,
+        `${import.meta.env.VITE_API_URL}/api/v1/chat/poll?${params}`,
         { headers: { Authorization: `Bearer ${token}` } },
       );
       const data = await res.json();
+
       if (data.newMessages?.length) {
         const newMsgs = data.newMessages
-          .filter((m) => m.message?.trim()) // skip empty scheduler messages
+          .filter((m) => m.message?.trim())
           .map((m) => ({
             id: m.id,
             role: m.role,
             content: m.message,
             timestamp: new Date(m.created_at).getTime(),
+            message_type: m.message_type,
           }));
-        setMessages((prev) => {
-          const ids = new Set(prev.map((m) => m.id));
-          return [...prev, ...newMsgs.filter((m) => !ids.has(m.id))];
-        });
+
+        if (newMsgs.length) {
+          // Advance cursor to just after the latest message received
+          lastSeenRef.current = new Date(
+            newMsgs[newMsgs.length - 1].timestamp + 1,
+          ).toISOString();
+
+          setMessages((prev) => {
+            const ids = new Set(prev.map((m) => m.id));
+            return [...prev, ...newMsgs.filter((m) => !ids.has(m.id))];
+          });
+        }
       }
-    } catch {}
+    } catch (e) {
+      console.error("Poll error:", e);
+    }
   };
 
   useEffect(() => {
@@ -928,6 +946,8 @@ export default function Home({ onNavigate }) {
   }, [chatOpen]);
 
   const openChat = () => {
+    // Seed cursor so first poll doesn't fetch old messages
+    lastSeenRef.current = new Date().toISOString();
     const welcome = {
       id: Date.now(),
       role: "assistant",
@@ -938,6 +958,7 @@ export default function Home({ onNavigate }) {
     setMessages([welcome]);
     setAllMessages((prev) => [...prev, welcome]);
   };
+
   const openDayChat = (_day, msgs) => {
     setChatOpen(true);
     setMessages(msgs);
@@ -980,9 +1001,11 @@ export default function Home({ onNavigate }) {
         return;
       }
       const mood = data.mood?.mood_label || "neutral";
-      if (data.checkin_date) setCheckinDate(data.checkin_date); // update virtual date for demo day cycling
 
-      // Update user message mood badge
+      if (data.checkin_date) setCheckinDate(data.checkin_date);
+      // ── PATCH: advance cursor after each send so poll doesn't double-fetch ──
+      lastSeenRef.current = new Date().toISOString();
+
       const moodUpdater = (prev) =>
         prev.map((m) => (m.id === userMsg.id ? { ...m, mood } : m));
       setMessages(moodUpdater);
@@ -992,11 +1015,9 @@ export default function Home({ onNavigate }) {
         ...prev,
       ]);
 
-      // Add AI reply directly from API response — never rely on poll for this
-      // Poll only handles proactive scheduler messages (evening, night, event followup)
       if (data.reply) {
         const aiMsg = {
-          id: data.checkin_id + "_" + Date.now(), // stable enough id
+          id: data.checkin_id + "_" + Date.now(),
           role: "assistant",
           content: data.reply,
           timestamp: Date.now(),

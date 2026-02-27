@@ -24,7 +24,7 @@ const HELPLINES = [
 const getConversationHistory = async (userId, checkinId) => {
   const { data } = await supabase
     .from("conversations")
-    .select("role, message, message_type")
+    .select("role, message, message_type, created_at")
     .eq("user_id", userId)
     .eq("checkin_id", checkinId)
     .order("created_at", { ascending: true });
@@ -108,7 +108,6 @@ const detectSelfHarm = async (message) => {
 
 // ── Check 2 consecutive low mood days ────────────────────────
 const checkConsecutiveLowMood = async (userId) => {
-  // Always check the 2 most recent checkins by date — works for both real and demo (virtual) dates
   const { data: recentCheckins } = await supabase
     .from("daily_checkins")
     .select("checkin_date, mood_label, mood_score")
@@ -125,6 +124,36 @@ const checkConsecutiveLowMood = async (userId) => {
     `Low mood days in last 2 checkins: ${lowDays.length} (dates: ${recentCheckins.map((c) => c.checkin_date).join(", ")})`,
   );
   return lowDays.length >= 2;
+};
+
+// ── Check if recommendation should trigger ────────────────────
+// Recommendation fires when user has replied 2+ times to ANY proactive email
+const shouldTriggerRecommendation = (history) => {
+  // Already sent?
+  const alreadySent = history.some(
+    (m) => m.message_type === "night_recommendation",
+  );
+  if (alreadySent) return false;
+
+  // Find first proactive assistant message
+  const firstProactiveIndex = history.findIndex(
+    (m) =>
+      m.role === "assistant" &&
+      (m.message_type === "event_followup" ||
+        m.message_type === "evening_checkin" ||
+        m.message_type === "night_checkin"),
+  );
+  if (firstProactiveIndex === -1) return false;
+
+  // Count user messages AFTER the first proactive message
+  const userRepliesAfterProactive = history
+    .slice(firstProactiveIndex + 1)
+    .filter((m) => m.role === "user");
+
+  console.log(
+    `User replies after first proactive msg: ${userRepliesAfterProactive.length}`,
+  );
+  return userRepliesAfterProactive.length >= 2;
 };
 
 // ── Helpline email HTML ───────────────────────────────────────
@@ -218,26 +247,7 @@ const buildHelplineEmail = (userName, aiMessage) => {
 </html>`;
 };
 
-// ── Check if night recommendation should trigger ──────────────
-const shouldTriggerRecommendation = (history) => {
-  const hasNightCheckin = history.some(
-    (m) => m.message_type === "night_checkin",
-  );
-  if (!hasNightCheckin) return false;
-  const alreadySent = history.some(
-    (m) => m.message_type === "night_recommendation",
-  );
-  if (alreadySent) return false;
-  const nightCheckinIndex = history.findLastIndex(
-    (m) => m.message_type === "night_checkin",
-  );
-  const messagesAfterNight = history
-    .slice(nightCheckinIndex + 1)
-    .filter((m) => m.role === "user");
-  return messagesAfterNight.length >= 2;
-};
-
-// ── Safe schedule insert with full logging ────────────────────
+// ── Safe schedule insert with logging ────────────────────────
 const insertScheduledMessage = async (payload) => {
   console.log("Inserting scheduled_message:", JSON.stringify(payload));
   const { data, error } = await supabase
@@ -265,9 +275,6 @@ export const morningCheckin = async (req, res) => {
     const isFast = req.query.fast === "true";
 
     // ── Demo day cycling ──────────────────────────────────────
-    // In fast mode: use a virtual date based on how many checkin days exist.
-    // Day 1 = today, Day 2 = today+1, Day 3 = today+2, etc.
-    // This lets the demo advance through multiple days in one sitting.
     let today;
     if (isFast) {
       const { data: allCheckins } = await supabase
@@ -275,8 +282,7 @@ export const morningCheckin = async (req, res) => {
         .select("checkin_date")
         .eq("user_id", req.user.id)
         .order("checkin_date", { ascending: true });
-      const dayOffset = allCheckins?.length > 0 ? allCheckins.length - 1 : 0;
-      // Check if latest checkin has a night_recommendation already — if so, advance to next day
+
       const latestDate = allCheckins?.[allCheckins.length - 1]?.checkin_date;
       if (latestDate) {
         const { data: latestCheckin } = await supabase
@@ -285,6 +291,7 @@ export const morningCheckin = async (req, res) => {
           .eq("user_id", req.user.id)
           .eq("checkin_date", latestDate)
           .single();
+
         if (latestCheckin) {
           const { data: nightRec } = await supabase
             .from("conversations")
@@ -293,8 +300,8 @@ export const morningCheckin = async (req, res) => {
             .eq("checkin_id", latestCheckin.id)
             .eq("message_type", "night_recommendation")
             .limit(1);
+
           if (nightRec?.length > 0) {
-            // Night recommendation already sent for this day — advance to next demo day
             const nextDay = new Date(latestDate);
             nextDay.setDate(nextDay.getDate() + 1);
             today = nextDay.toISOString().split("T")[0];
@@ -349,7 +356,6 @@ export const morningCheckin = async (req, res) => {
 
       const aiResponse = await llm.invoke([new SystemMessage(selfHarmPrompt)]);
 
-      // Save conversation if checkin exists
       const { data: existingCheckin } = await supabase
         .from("daily_checkins")
         .select("id")
@@ -376,7 +382,6 @@ export const morningCheckin = async (req, res) => {
         ]);
       }
 
-      // Send helpline email async (don't await — don't block response)
       sendMail({
         email: user.email,
         subject: `we're thinking of you 💜`,
@@ -445,12 +450,13 @@ export const morningCheckin = async (req, res) => {
         },
       ]);
 
+      // ── Check if recommendation should fire after this reply ──
       const updatedHistory = await getConversationHistory(
         userId,
         existingCheckin.id,
       );
       if (shouldTriggerRecommendation(updatedHistory)) {
-        console.log("Triggering night recommendation...");
+        console.log("Triggering night recommendation from chat reply...");
         handleNightRecommendation(
           userId,
           existingCheckin.id,
@@ -469,7 +475,7 @@ export const morningCheckin = async (req, res) => {
         },
         events_detected: 0,
         cbt_triggered: cbtTriggered,
-        checkin_date: today, // virtual date — frontend uses this for polling in demo mode
+        checkin_date: today,
       });
     }
 
@@ -506,12 +512,16 @@ export const morningCheckin = async (req, res) => {
     const cbtTriggered = await checkConsecutiveLowMood(userId);
     console.log("CBT triggered:", cbtTriggered);
 
+    // ── Schedule ONLY the first email (10s in fast mode) ─────
+    // The scheduler will chain the 2nd email 10s after the 1st is sent.
+    // This prevents all 3 emails from being scheduled upfront.
     if (events.length > 0) {
+      // If there's an event, first email = event_followup
       for (const event of events) {
         const eventTime = new Date(event.time);
         const followUpAt = isFast
-          ? new Date(Date.now() + 30 * 1000)
-          : new Date(eventTime.getTime() + 2 * 60 * 60 * 1000);
+          ? new Date(Date.now() + 10 * 1000) // 10s in demo
+          : new Date(eventTime.getTime() + 2 * 60 * 60 * 1000); // 2h after event in prod
 
         const { data: savedEvent, error: eventError } = await supabase
           .from("user_events")
@@ -533,48 +543,38 @@ export const morningCheckin = async (req, res) => {
           continue;
         }
         console.log("✓ Event saved:", savedEvent.id);
+
+        // Schedule event_followup as first email
         await insertScheduledMessage({
           user_id: userId,
           event_id: savedEvent.id,
           scheduled_for: followUpAt.toISOString(),
           message_type: "event_followup",
+          status: "pending",
+          is_fast: isFast,
         });
       }
-    }
-
-    const eveningTime = new Date();
-    eveningTime.setTime(
-      isFast
-        ? Date.now() + 60 * 1000
+    } else {
+      // No events — first email = evening_checkin after 10s (demo) or at 7pm (prod)
+      const firstEmailTime = isFast
+        ? new Date(Date.now() + 10 * 1000)
         : (() => {
             const t = new Date();
             t.setHours(19, 0, 0, 0);
+            if (t <= new Date()) t.setDate(t.getDate() + 1);
             return t;
-          })().getTime(),
-    );
+          })();
 
-    const nightTime = new Date();
-    nightTime.setTime(
-      isFast
-        ? Date.now() + 110 * 1000
-        : (() => {
-            const t = new Date();
-            t.setHours(22, 0, 0, 0);
-            return t;
-          })().getTime(),
-    );
+      await insertScheduledMessage({
+        user_id: userId,
+        scheduled_for: firstEmailTime.toISOString(),
+        message_type: "evening_checkin",
+        status: "pending",
+        is_fast: isFast,
+      });
+    }
 
-    await insertScheduledMessage({
-      user_id: userId,
-      scheduled_for: eveningTime.toISOString(),
-      message_type: "evening_checkin",
-    });
-    await insertScheduledMessage({
-      user_id: userId,
-      scheduled_for: nightTime.toISOString(),
-      message_type: "night_checkin",
-    });
-
+    // Save user's first message
     const { error: convError } = await supabase.from("conversations").insert({
       user_id: userId,
       checkin_id: checkin.id,
@@ -619,7 +619,7 @@ export const morningCheckin = async (req, res) => {
       mood,
       events_detected: events.length,
       cbt_triggered: cbtTriggered,
-      checkin_date: today, // virtual date — frontend uses this for polling in demo mode
+      checkin_date: today,
     });
   } catch (err) {
     console.error("morningCheckin CRASH:", err);
@@ -628,6 +628,9 @@ export const morningCheckin = async (req, res) => {
 };
 
 // ── Poll for new proactive messages ──────────────────────────
+// Returns ALL new assistant messages — morning replies come from data.reply,
+// so we can safely surface proactive messages here for in-chat display.
+// The frontend deduplicates by message id.
 export const pollMessages = async (req, res) => {
   const userId = req.user.id;
   const { date, last_seen } = req.query;
@@ -653,7 +656,8 @@ export const pollMessages = async (req, res) => {
     .eq("user_id", userId)
     .eq("checkin_id", checkin.id)
     .eq("role", "assistant")
-    .neq("message_type", "morning") // morning replies come via data.reply — poll only handles scheduler messages
+    .neq("message_type", "morning") // Morning replies come via data.reply — exclude to avoid duplicates
+    .neq("message_type", "night_recommendation") // Recommendation handled separately
     .gt("created_at", since)
     .order("created_at", { ascending: true });
 

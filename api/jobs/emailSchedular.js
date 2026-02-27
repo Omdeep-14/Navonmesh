@@ -1,6 +1,7 @@
 import cron from "node-cron";
 import supabase from "../config/supabaseConfig.js";
 import sendMail from "../config/nodemailer.js";
+import { handleNightRecommendation } from "../controller/recommender.js";
 import { ChatGroq } from "@langchain/groq";
 import {
   HumanMessage,
@@ -18,7 +19,7 @@ const llm = new ChatGroq({
 const getConversationHistory = async (userId, checkinId) => {
   const { data, error } = await supabase
     .from("conversations")
-    .select("role, message")
+    .select("role, message, message_type")
     .eq("user_id", userId)
     .eq("checkin_id", checkinId)
     .order("created_at", { ascending: true });
@@ -78,7 +79,7 @@ const getVibeForAgeMood = (age, moodLabel, moodScore) => {
   return vibes[ageBucket]?.[mood] || "warm and casual, like a good friend";
 };
 
-// ── Generate proactive AI message ────────────────────────────
+// ── Generate proactive AI message ─────────────────────────────
 const generateProactiveMessage = async (type, user, checkin, history) => {
   const vibe = getVibeForAgeMood(
     user.age,
@@ -87,7 +88,7 @@ const generateProactiveMessage = async (type, user, checkin, history) => {
   );
   const location = [user.area, user.city].filter(Boolean).join(", ");
   const morningMessage = history.find((m) => m.role === "user")?.message || "";
-  const recentHistory = history.slice(-6);
+  const recentHistory = history.slice(-8); // More history for context-aware messages
 
   const baseRules = `
 You are texting ${user.name} like a real friend — NOT a therapist, NOT an AI assistant.
@@ -103,10 +104,17 @@ STRICT RULES:
 - No bullet points, no lists, no paragraphs
 - Max 2 sentences — short like a real text message
 - Sound like a human who actually knows them, not a wellness app
-- The message MUST end with a question`;
+- The message MUST end with a question
+- Reference what they've said in conversation if there's history — show you remember`;
+
+  const conversationContext =
+    recentHistory.length > 1
+      ? `\nConversation so far today:\n${recentHistory.map((m) => `${m.role === "user" ? user.name : "You"}: ${m.message}`).join("\n")}`
+      : "";
 
   const prompts = {
     event_followup: `${baseRules}
+${conversationContext}
 
 Context: This morning ${user.name} mentioned something they were stressed or nervous about.
 Morning message: "${morningMessage}"
@@ -116,19 +124,23 @@ NEVER end with a statement or motivation. Always a question.
 Write the message:`,
 
     evening_checkin: `${baseRules}
+${conversationContext}
 
 Context: ${user.name} started the day feeling ${checkin.mood_label} (${checkin.mood_score}/10).
 Morning message: "${morningMessage}"
+This is your SECOND check-in today — you already texted them once before. Reference that naturally if it fits.
 It's evening. Ask them something real — make them want to open the app and reply.
 If mood was low → softer, more gentle. If mood was okay/good → lighter, more casual.
 NEVER send motivation or advice.
 Write the message:`,
 
     night_checkin: `${baseRules}
+${conversationContext}
 
 Context: ${user.name} started the day feeling ${checkin.mood_label} (${checkin.mood_score}/10).
 Morning message: "${morningMessage}"
-It's night. Check in before they sleep.
+This is your THIRD check-in today. You've been texting all day. Keep it natural and light.
+It's night. Check in before they sleep. Based on everything they've shared today, ask something warm and specific.
 If mood was low → extra gentle and warm, low pressure. If mood was okay/good → easy and light.
 No motivational endings, no advice.
 Write the message:`,
@@ -136,6 +148,8 @@ Write the message:`,
 
   const systemPrompt = prompts[type] || prompts.evening_checkin;
   const messages = [new SystemMessage(systemPrompt)];
+
+  // Add conversation history into the LLM context
   recentHistory.forEach((msg) => {
     messages.push(
       msg.role === "user"
@@ -242,6 +256,36 @@ const buildEmailHtml = (userName, messageText, type, checkinId, moodLabel) => {
 </body></html>`;
 };
 
+// ── Check if recommendation should fire ───────────────────────
+// Fires when there are 2+ user replies AFTER the first proactive email was sent
+const shouldTriggerRecommendation = (history, checkinId) => {
+  // Already sent a recommendation?
+  const alreadySent = history.some(
+    (m) => m.message_type === "night_recommendation",
+  );
+  if (alreadySent) return false;
+
+  // Find first proactive message (event_followup or evening_checkin)
+  const firstProactiveIndex = history.findIndex(
+    (m) =>
+      m.role === "assistant" &&
+      (m.message_type === "event_followup" ||
+        m.message_type === "evening_checkin" ||
+        m.message_type === "night_checkin"),
+  );
+  if (firstProactiveIndex === -1) return false;
+
+  // Count user replies AFTER the first proactive message
+  const userRepliesAfterProactive = history
+    .slice(firstProactiveIndex + 1)
+    .filter((m) => m.role === "user");
+
+  console.log(
+    `User replies after first proactive msg: ${userRepliesAfterProactive.length}`,
+  );
+  return userRepliesAfterProactive.length >= 2;
+};
+
 // ── Main processor ────────────────────────────────────────────
 const processScheduledMessages = async () => {
   const now = new Date().toISOString();
@@ -277,9 +321,7 @@ const processScheduledMessages = async () => {
         continue;
       }
 
-      // ── KEY FIX: find checkin by user_id only, ordered by most recent ──
-      // Do NOT filter by today's real date — in demo mode the checkin date
-      // is a virtual date that may not match the real calendar date.
+      // Find most recent checkin for this user (works for demo + real dates)
       const { data: checkin } = await supabase
         .from("daily_checkins")
         .select("*")
@@ -305,6 +347,29 @@ const processScheduledMessages = async () => {
         scheduledMsg.user_id,
         checkin.id,
       );
+
+      // ── Check if recommendation should fire BEFORE sending next email ──
+      // This handles the case where user has replied 2+ times to proactive emails
+      if (shouldTriggerRecommendation(history, checkin.id)) {
+        console.log(
+          `Recommendation trigger detected for ${user.name} — firing recommendation instead`,
+        );
+        await handleNightRecommendation(
+          scheduledMsg.user_id,
+          checkin.id,
+          history,
+          user,
+          checkin,
+        ).catch((err) => console.error("Recommendation error:", err.message));
+
+        // Mark this scheduled message as skipped since recommendation supersedes it
+        await supabase
+          .from("scheduled_messages")
+          .update({ status: "skipped" })
+          .eq("id", scheduledMsg.id);
+        continue;
+      }
+
       const messageText = await generateProactiveMessage(
         scheduledMsg.message_type,
         user,
@@ -312,16 +377,20 @@ const processScheduledMessages = async () => {
         history,
       );
 
-      // 1. save to conversations
-      await supabase.from("conversations").insert({
-        user_id: scheduledMsg.user_id,
-        checkin_id: checkin.id,
-        role: "assistant",
-        message: messageText,
-        message_type: scheduledMsg.message_type,
-      });
+      // 1. Save to conversations (with message_type so poll can surface it)
+      const { data: savedConv } = await supabase
+        .from("conversations")
+        .insert({
+          user_id: scheduledMsg.user_id,
+          checkin_id: checkin.id,
+          role: "assistant",
+          message: messageText,
+          message_type: scheduledMsg.message_type,
+        })
+        .select()
+        .single();
 
-      // 2. send email
+      // 2. Send email
       await sendMail({
         email: user.email,
         subject: getEmailSubject(scheduledMsg.message_type),
@@ -334,7 +403,7 @@ const processScheduledMessages = async () => {
         ),
       });
 
-      // 3. mark sent
+      // 3. Mark this message as sent
       await supabase
         .from("scheduled_messages")
         .update({ status: "sent" })
@@ -343,12 +412,67 @@ const processScheduledMessages = async () => {
       console.log(
         `✓ Sent ${scheduledMsg.message_type} to ${user.name} (${user.email})`,
       );
+
+      // ── CHAIN: Schedule next proactive message 10s later ──────
+      // event_followup → schedule evening_checkin in 10s
+      // evening_checkin → schedule night_checkin in 10s
+      // night_checkin → no next (recommendation fires after user replies)
+      const chainMap = {
+        event_followup: "evening_checkin",
+        evening_checkin: "night_checkin",
+      };
+
+      const nextType = chainMap[scheduledMsg.message_type];
+      if (nextType) {
+        const isFast = scheduledMsg.is_fast !== false; // default to fast for demo
+        const delayMs = isFast ? 10 * 1000 : getProductionDelay(nextType);
+        const nextScheduledFor = new Date(Date.now() + delayMs).toISOString();
+
+        const { error: chainError } = await supabase
+          .from("scheduled_messages")
+          .insert({
+            user_id: scheduledMsg.user_id,
+            scheduled_for: nextScheduledFor,
+            message_type: nextType,
+            status: "pending",
+            is_fast: isFast,
+          });
+
+        if (chainError) {
+          console.error(
+            `Failed to chain ${nextType}:`,
+            JSON.stringify(chainError),
+          );
+        } else {
+          console.log(
+            `✓ Chained ${nextType} scheduled for ${nextScheduledFor} (${delayMs / 1000}s from now)`,
+          );
+        }
+      }
     } catch (err) {
       console.error(`✗ Failed to process message ${scheduledMsg.id}:`);
       console.error(`  Message: ${err.message}`);
       console.error(`  Stack: ${err.stack}`);
     }
   }
+};
+
+// ── Production delays for real (non-demo) mode ───────────────
+const getProductionDelay = (type) => {
+  const now = new Date();
+  const target = new Date();
+
+  if (type === "evening_checkin") {
+    target.setHours(19, 0, 0, 0);
+    if (target <= now) target.setDate(target.getDate() + 1);
+    return target.getTime() - now.getTime();
+  }
+  if (type === "night_checkin") {
+    target.setHours(22, 0, 0, 0);
+    if (target <= now) target.setDate(target.getDate() + 1);
+    return target.getTime() - now.getTime();
+  }
+  return 2 * 60 * 60 * 1000; // 2h default for event followup
 };
 
 // ── Start the cron job ────────────────────────────────────────

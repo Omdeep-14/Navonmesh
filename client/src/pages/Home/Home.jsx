@@ -674,6 +674,41 @@ export default function Home({ onNavigate }) {
     bottomRef.current?.scrollIntoView({ behavior: "smooth" });
   }, [messages, isTyping]);
 
+  // poll for proactive messages from Mendi
+  useEffect(() => {
+    if (!chatOpen) return;
+
+    const poll = async () => {
+      const token = localStorage.getItem("token");
+      const today = new Date().toISOString().split("T")[0];
+
+      try {
+        const res = await fetch(
+          `${import.meta.env.VITE_API_URL}/api/v1/chat/poll?date=${today}`,
+          { headers: { Authorization: `Bearer ${token}` } },
+        );
+        const data = await res.json();
+
+        if (data.newMessages?.length) {
+          const newMsgs = data.newMessages.map((m) => ({
+            id: m.id,
+            role: m.role,
+            content: m.message,
+            timestamp: new Date(m.created_at).getTime(),
+          }));
+          setMessages((prev) => {
+            const existingIds = new Set(prev.map((m) => m.id));
+            const fresh = newMsgs.filter((m) => !existingIds.has(m.id));
+            return [...prev, ...fresh];
+          });
+        }
+      } catch {}
+    };
+
+    const id = setInterval(poll, 30_000);
+    return () => clearInterval(id);
+  }, [chatOpen]);
+
   const openChat = () => {
     const welcomeMsg = {
       id: Date.now(),
@@ -709,7 +744,7 @@ export default function Home({ onNavigate }) {
 
     try {
       const res = await fetch(
-        `${import.meta.env.VITE_API_URL}/api/v1/auth/morning-checkin`,
+        `${import.meta.env.VITE_API_URL}/api/v1/auth/morning-checkin?fast=true`,
         {
           method: "POST",
           headers: {

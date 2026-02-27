@@ -85,6 +85,9 @@ export const morningCheckin = async (req, res) => {
     const userId = req.user.id;
     const today = new Date().toISOString().split("T")[0];
 
+    // read isFast at the top so it's available everywhere
+    const isFast = req.query.fast === "true";
+
     if (!message) return res.status(400).json({ error: "Message is required" });
 
     // get user info
@@ -174,7 +177,11 @@ export const morningCheckin = async (req, res) => {
     if (events.length > 0) {
       for (const event of events) {
         const eventTime = new Date(event.time);
-        const followUpAt = new Date(eventTime.getTime() + 2 * 60 * 60 * 1000);
+
+        // isFast compresses event follow-up to 30 seconds
+        const followUpAt = isFast
+          ? new Date(Date.now() + 30 * 1000)
+          : new Date(eventTime.getTime() + 2 * 60 * 60 * 1000);
 
         const { data: savedEvent } = await supabase
           .from("user_events")
@@ -199,9 +206,26 @@ export const morningCheckin = async (req, res) => {
 
     // schedule evening and night check-ins
     const eveningTime = new Date();
-    eveningTime.setHours(19, 0, 0, 0);
+    eveningTime.setTime(
+      isFast
+        ? Date.now() + 60 * 1000
+        : (() => {
+            const t = new Date();
+            t.setHours(19, 0, 0, 0);
+            return t;
+          })().getTime(),
+    );
+
     const nightTime = new Date();
-    nightTime.setHours(22, 0, 0, 0);
+    nightTime.setTime(
+      isFast
+        ? Date.now() + 110 * 1000
+        : (() => {
+            const t = new Date();
+            t.setHours(22, 0, 0, 0);
+            return t;
+          })().getTime(),
+    );
 
     await supabase.from("scheduled_messages").insert([
       {
@@ -263,4 +287,32 @@ export const morningCheckin = async (req, res) => {
     console.error(err);
     res.status(500).json({ error: err.message });
   }
+};
+
+// ── Poll for new proactive messages ──────────────────────────
+export const pollMessages = async (req, res) => {
+  const userId = req.user.id;
+  const { date } = req.query;
+
+  const { data: checkin } = await supabase
+    .from("daily_checkins")
+    .select("id")
+    .eq("user_id", userId)
+    .eq("checkin_date", date)
+    .single();
+
+  if (!checkin) return res.json({ newMessages: [] });
+
+  const since = new Date(Date.now() - 35_000).toISOString();
+
+  const { data: newMessages } = await supabase
+    .from("conversations")
+    .select("*")
+    .eq("user_id", userId)
+    .eq("checkin_id", checkin.id)
+    .eq("role", "assistant")
+    .gte("created_at", since)
+    .order("created_at", { ascending: true });
+
+  res.json({ newMessages: newMessages || [] });
 };

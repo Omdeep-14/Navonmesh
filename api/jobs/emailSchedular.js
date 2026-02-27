@@ -32,7 +32,6 @@ const getConversationHistory = async (userId, checkinId) => {
 
 // ── Tone guide based on age AND mood ─────────────────────────
 const getVibeForAgeMood = (age, moodLabel, moodScore) => {
-  // age bucket
   const ageBucket = !age
     ? "adult"
     : age <= 15
@@ -44,11 +43,8 @@ const getVibeForAgeMood = (age, moodLabel, moodScore) => {
           : age <= 55
             ? "midlife"
             : "senior";
-
-  // mood energy
   const isLow = moodScore <= 4;
   const isOkay = moodScore >= 5 && moodScore <= 7;
-  const isGood = moodScore >= 8;
 
   const vibes = {
     teen: {
@@ -90,11 +86,7 @@ const generateProactiveMessage = async (type, user, checkin, history) => {
     checkin.mood_score,
   );
   const location = [user.area, user.city].filter(Boolean).join(", ");
-
-  // pull the first user message (their morning checkin) for context
   const morningMessage = history.find((m) => m.role === "user")?.message || "";
-
-  // pull last few exchanges for tight context
   const recentHistory = history.slice(-6);
 
   const baseRules = `
@@ -104,14 +96,14 @@ ${location ? `They live in ${location} — only mention this if it genuinely flo
 ${user.age ? `They are ${user.age} years old.` : ""}
 Their mood today: ${checkin.mood_label} (${checkin.mood_score}/10) — let this shape how you talk, not what you say.
 
-STRICT RULES — if you break any of these the message fails:
+STRICT RULES:
 - Never say "I'm here for you", "you're not alone", "I'm so sorry to hear that", "sending love", "safe space", "it's okay to feel", "you got this"
 - Never use phrases like "it sounds like", "I can imagine", "I understand how you feel"
 - Never start with "Hey ${user.name}" — just get straight to what you want to say
 - No bullet points, no lists, no paragraphs
 - Max 2 sentences — short like a real text message
 - Sound like a human who actually knows them, not a wellness app
-- The mood should shape your TONE and ENERGY, not your words — don't say "I know you're feeling anxious"`;
+- The message MUST end with a question`;
 
   const prompts = {
     event_followup: `${baseRules}
@@ -119,8 +111,7 @@ STRICT RULES — if you break any of these the message fails:
 Context: This morning ${user.name} mentioned something they were stressed or nervous about.
 Morning message: "${morningMessage}"
 You want to casually ask how it went — like a friend who remembered.
-The message MUST end with a question — open ended, something they'd actually want to answer.
-If their mood was low → ask gently and warmly. If mood was okay/good → ask more casually and lightly.
+If their mood was low → ask gently and warmly. If mood was okay/good → ask more casually.
 NEVER end with a statement or motivation. Always a question.
 Write the message:`,
 
@@ -129,9 +120,8 @@ Write the message:`,
 Context: ${user.name} started the day feeling ${checkin.mood_label} (${checkin.mood_score}/10).
 Morning message: "${morningMessage}"
 It's evening. Ask them something real — make them want to open the app and reply.
-The message MUST end with a question.
-If mood was low → softer, more gentle check-in energy. If mood was okay/good → lighter, more casual.
-NEVER send motivation or advice. A friend asks, they don't lecture.
+If mood was low → softer, more gentle. If mood was okay/good → lighter, more casual.
+NEVER send motivation or advice.
 Write the message:`,
 
     night_checkin: `${baseRules}
@@ -139,15 +129,13 @@ Write the message:`,
 Context: ${user.name} started the day feeling ${checkin.mood_label} (${checkin.mood_score}/10).
 Morning message: "${morningMessage}"
 It's night. Check in before they sleep.
-The message MUST end with a question.
 If mood was low → extra gentle and warm, low pressure. If mood was okay/good → easy and light.
-No motivational endings, no "you got this", no advice.
+No motivational endings, no advice.
 Write the message:`,
   };
 
   const systemPrompt = prompts[type] || prompts.evening_checkin;
   const messages = [new SystemMessage(systemPrompt)];
-
   recentHistory.forEach((msg) => {
     messages.push(
       msg.role === "user"
@@ -164,8 +152,8 @@ Write the message:`,
   return response.content;
 };
 
-// ── Email subject lines per message type ─────────────────────
-const getEmailSubject = (type, userName) => {
+// ── Email subject lines ───────────────────────────────────────
+const getEmailSubject = (type) => {
   const subjects = {
     event_followup: `hey, how did it go? 👀`,
     evening_checkin: `checking in on you ☀️`,
@@ -174,82 +162,140 @@ const getEmailSubject = (type, userName) => {
   return subjects[type] || `a message from mendi 💛`;
 };
 
+// ── Mood accent for email ────────────────────────────────────
+const getMoodAccent = (moodLabel) => {
+  const accents = {
+    happy: { from: "#f59e0b", to: "#ef4444", text: "#fbbf24" },
+    okay: { from: "#6366f1", to: "#8b5cf6", text: "#a78bfa" },
+    anxious: { from: "#8b5cf6", to: "#6366f1", text: "#c4b5fd" },
+    sad: { from: "#3b82f6", to: "#6366f1", text: "#93c5fd" },
+    stressed: { from: "#ec4899", to: "#8b5cf6", text: "#f9a8d4" },
+    angry: { from: "#ef4444", to: "#f97316", text: "#fca5a5" },
+  };
+  return accents[moodLabel] || accents.okay;
+};
+
 // ── Styled HTML email template ────────────────────────────────
-const buildEmailHtml = (userName, messageText, type) => {
+const buildEmailHtml = (userName, messageText, type, checkinId, moodLabel) => {
+  const appUrl = process.env.APP_URL || "http://localhost:5173";
+  // ── Reply URL carries checkin + type context ──
+  const replyUrl = `${appUrl}/home?reply=${checkinId}&type=${type}`;
+  const accent = getMoodAccent(moodLabel);
+
   const emojiMap = {
     event_followup: "👀",
     evening_checkin: "☀️",
     night_checkin: "🌙",
   };
-  const emoji = emojiMap[type] || "💛";
-  const appUrl = process.env.APP_URL || "http://localhost:5173";
+  const headerEmoji = emojiMap[type] || "💛";
 
-  return `
-    <!DOCTYPE html>
-    <html>
-      <head>
-        <meta charset="utf-8" />
-        <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-        <title>Mendi</title>
-      </head>
-      <body style="margin:0;padding:0;background-color:#0f172a;font-family:'DM Sans',Helvetica,Arial,sans-serif;">
-        <table width="100%" cellpadding="0" cellspacing="0" style="background-color:#0f172a;padding:40px 20px;">
-          <tr>
-            <td align="center">
-              <table width="560" cellpadding="0" cellspacing="0" style="background-color:#1e293b;border-radius:16px;overflow:hidden;max-width:560px;width:100%;">
-                <tr>
-                  <td style="background:linear-gradient(135deg,#1e293b 0%,#0f172a 100%);padding:32px 40px 24px;border-bottom:1px solid #334155;">
-                    <table width="100%" cellpadding="0" cellspacing="0">
-                      <tr>
-                        <td>
-                          <div style="width:40px;height:40px;background:linear-gradient(135deg,#fbbf24,#f87171);border-radius:50%;display:inline-block;line-height:40px;text-align:center;font-size:18px;">${emoji}</div>
-                        </td>
-                        <td style="padding-left:12px;vertical-align:middle;">
-                          <span style="color:#fbbf24;font-size:22px;font-weight:700;letter-spacing:-0.5px;">Mendi</span>
-                        </td>
-                      </tr>
-                    </table>
-                  </td>
-                </tr>
-                <tr>
-                  <td style="padding:36px 40px;">
-                    <p style="color:#f1f5f9;font-size:20px;line-height:1.7;margin:0 0 28px 0;font-style:italic;">${messageText}</p>
-                    <table cellpadding="0" cellspacing="0">
-                      <tr>
-                        <td style="background:linear-gradient(135deg,#fbbf24,#f87171);border-radius:10px;padding:1px;">
-                          <a href="${appUrl}/home"
-                             style="display:inline-block;background:#1e293b;color:#fbbf24;text-decoration:none;font-size:14px;font-weight:600;padding:12px 28px;border-radius:9px;letter-spacing:0.3px;">
-                            Reply to Mendi →
-                          </a>
-                        </td>
-                      </tr>
-                    </table>
-                  </td>
-                </tr>
-                <tr>
-                  <td style="padding:20px 40px 28px;border-top:1px solid #334155;">
-                    <p style="color:#475569;font-size:12px;margin:0;line-height:1.6;">
-                      You're receiving this because you checked in with Mendi today.<br/>
-                      <a href="${appUrl}/home" style="color:#64748b;text-decoration:underline;">Open Mendi</a>
-                    </p>
-                  </td>
-                </tr>
-              </table>
-            </td>
-          </tr>
-        </table>
-      </body>
-    </html>
-  `;
-};
+  const labelMap = {
+    event_followup: "following up",
+    evening_checkin: "evening check-in",
+    night_checkin: "night check-in",
+  };
+  const label = labelMap[type] || "check-in";
 
-// ── Send email ────────────────────────────────────────────────
-const sendEmail = async (toEmail, userName, messageText, type) => {
-  await sendMail({
-    email: toEmail,
-    subject: getEmailSubject(type, userName),
-    html: buildEmailHtml(userName, messageText, type),
-  });
+  return `<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8"/>
+  <meta name="viewport" content="width=device-width,initial-scale=1.0"/>
+  <title>Mendi</title>
+</head>
+<body style="margin:0;padding:0;background:#06090f;font-family:Helvetica,Arial,sans-serif;-webkit-font-smoothing:antialiased;">
+<table width="100%" cellpadding="0" cellspacing="0" role="presentation" style="background:#06090f;padding:52px 20px 64px;">
+  <tr>
+    <td align="center">
+      <table width="520" cellpadding="0" cellspacing="0" role="presentation" style="max-width:520px;width:100%;">
+
+        <!-- wordmark -->
+        <tr>
+          <td style="padding:0 4px 24px;">
+            <span style="font-size:11px;font-weight:800;letter-spacing:4px;text-transform:uppercase;color:${accent.from};">MENDI</span>
+          </td>
+        </tr>
+
+        <!-- card -->
+        <tr>
+          <td style="background:#0c1220;border-radius:24px;border:1px solid #131c2e;overflow:hidden;">
+
+            <!-- mood gradient bar -->
+            <table width="100%" cellpadding="0" cellspacing="0">
+              <tr><td style="height:2px;background:linear-gradient(90deg,${accent.from},${accent.to},transparent);"></td></tr>
+            </table>
+
+            <!-- header -->
+            <table width="100%" cellpadding="0" cellspacing="0">
+              <tr>
+                <td style="padding:36px 44px 24px;">
+                  <table cellpadding="0" cellspacing="0">
+                    <tr>
+                      <td style="vertical-align:top;padding-top:2px;">
+                        <div style="width:42px;height:42px;background:linear-gradient(135deg,${accent.from},${accent.to});border-radius:13px;text-align:center;line-height:42px;font-size:19px;display:inline-block;">${headerEmoji}</div>
+                      </td>
+                      <td style="padding-left:14px;vertical-align:top;">
+                        <p style="margin:0 0 3px;color:#e2e8f0;font-size:17px;font-weight:700;letter-spacing:-0.2px;">hey ${userName}</p>
+                        <p style="margin:0;color:#334155;font-size:12px;letter-spacing:0.2px;">${label} from mendi</p>
+                      </td>
+                    </tr>
+                  </table>
+                </td>
+              </tr>
+            </table>
+
+            <!-- thin rule -->
+            <table width="100%" cellpadding="0" cellspacing="0">
+              <tr><td style="padding:0 44px;"><div style="height:1px;background:#131c2e;"></div></td></tr>
+            </table>
+
+            <!-- message -->
+            <table width="100%" cellpadding="0" cellspacing="0">
+              <tr>
+                <td style="padding:32px 44px 36px;">
+                  <p style="margin:0;color:#94a3b8;font-size:17px;line-height:1.85;">${messageText}</p>
+                </td>
+              </tr>
+            </table>
+
+            <!-- rule -->
+            <table width="100%" cellpadding="0" cellspacing="0">
+              <tr><td style="padding:0 44px;"><div style="height:1px;background:#131c2e;"></div></td></tr>
+            </table>
+
+            <!-- reply CTA -->
+            <table width="100%" cellpadding="0" cellspacing="0">
+              <tr>
+                <td style="padding:32px 44px 40px;">
+                  <a href="${replyUrl}"
+                     style="display:inline-block;color:${accent.text};text-decoration:none;font-size:13px;font-weight:600;letter-spacing:0.3px;border-bottom:1px solid ${accent.text};padding-bottom:2px;font-family:Helvetica,Arial,sans-serif;">
+                    reply to mendi →
+                  </a>
+                </td>
+              </tr>
+            </table>
+
+          </td>
+        </tr>
+
+        <!-- footer -->
+        <tr>
+          <td style="padding:24px 4px 0;">
+            <table width="100%" cellpadding="0" cellspacing="0">
+              <tr>
+                <td><p style="margin:0;color:#1e293b;font-size:11px;">from your friend at mendi 💛</p></td>
+                <td align="right"><a href="${appUrl}/home" style="color:#1e293b;font-size:11px;text-decoration:none;">open app</a></td>
+              </tr>
+            </table>
+          </td>
+        </tr>
+
+      </table>
+    </td>
+  </tr>
+</table>
+</body>
+</html>`;
 };
 
 // ── Main processor ────────────────────────────────────────────
@@ -272,7 +318,6 @@ const processScheduledMessages = async () => {
 
   for (const scheduledMsg of dueMessages) {
     try {
-      // fetch age, city, area alongside name and email
       const { data: user } = await supabase
         .from("users")
         .select("name, email, age, city, area")
@@ -313,7 +358,6 @@ const processScheduledMessages = async () => {
         scheduledMsg.user_id,
         checkin.id,
       );
-
       const messageText = await generateProactiveMessage(
         scheduledMsg.message_type,
         user,
@@ -321,7 +365,7 @@ const processScheduledMessages = async () => {
         history,
       );
 
-      // 1. save to conversations → appears in chat via polling
+      // 1. save to conversations
       await supabase.from("conversations").insert({
         user_id: scheduledMsg.user_id,
         checkin_id: checkin.id,
@@ -330,13 +374,18 @@ const processScheduledMessages = async () => {
         message_type: scheduledMsg.message_type,
       });
 
-      // 2. send email
-      await sendEmail(
-        user.email,
-        user.name,
-        messageText,
-        scheduledMsg.message_type,
-      );
+      // 2. send email with reply URL
+      await sendMail({
+        email: user.email,
+        subject: getEmailSubject(scheduledMsg.message_type),
+        html: buildEmailHtml(
+          user.name,
+          messageText,
+          scheduledMsg.message_type,
+          checkin.id, // ← checkinId for reply URL
+          checkin.mood_label, // ← mood for accent color
+        ),
+      });
 
       // 3. mark as sent
       await supabase

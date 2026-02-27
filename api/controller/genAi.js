@@ -28,15 +28,13 @@ const getConversationHistory = async (userId, checkinId) => {
 // ── Build LangChain message array from history ────────────────
 const buildMessages = (systemPrompt, history, currentMessage) => {
   const messages = [new SystemMessage(systemPrompt)];
-
   history.forEach((msg) => {
-    if (msg.role === "user") {
-      messages.push(new HumanMessage(msg.message));
-    } else {
-      messages.push(new AIMessage(msg.message));
-    }
+    messages.push(
+      msg.role === "user"
+        ? new HumanMessage(msg.message)
+        : new AIMessage(msg.message),
+    );
   });
-
   messages.push(new HumanMessage(currentMessage));
   return messages;
 };
@@ -97,7 +95,6 @@ const shouldTriggerRecommendation = (history) => {
   const messagesAfterNight = history
     .slice(nightCheckinIndex + 1)
     .filter((m) => m.role === "user");
-
   return messagesAfterNight.length >= 2;
 };
 
@@ -135,7 +132,6 @@ export const morningCheckin = async (req, res) => {
 
     if (!message) return res.status(400).json({ error: "Message is required" });
 
-    // get user info
     const { data: user, error: userError } = await supabase
       .from("users")
       .select("name, email, age, city, area")
@@ -149,7 +145,6 @@ export const morningCheckin = async (req, res) => {
 
     console.log("User fetched:", user.name);
 
-    // check if already checked in today
     const { data: existingCheckin } = await supabase
       .from("daily_checkins")
       .select("*")
@@ -162,7 +157,7 @@ export const morningCheckin = async (req, res) => {
       existingCheckin?.id || "none — first checkin of the day",
     );
 
-    // ── Already checked in — continue conversation with memory ──
+    // ── Already checked in — continue conversation ──
     if (existingCheckin) {
       const history = await getConversationHistory(userId, existingCheckin.id);
 
@@ -200,7 +195,6 @@ export const morningCheckin = async (req, res) => {
         },
       ]);
 
-      // ── Check if night recommendation should fire ──
       const updatedHistory = await getConversationHistory(
         userId,
         existingCheckin.id,
@@ -257,11 +251,9 @@ export const morningCheckin = async (req, res) => {
 
     console.log("✓ Checkin created:", checkin.id);
 
-    // save events and schedule follow-ups
     if (events.length > 0) {
       for (const event of events) {
         const eventTime = new Date(event.time);
-
         const followUpAt = isFast
           ? new Date(Date.now() + 30 * 1000)
           : new Date(eventTime.getTime() + 2 * 60 * 60 * 1000);
@@ -285,7 +277,6 @@ export const morningCheckin = async (req, res) => {
           );
           continue;
         }
-
         console.log("✓ Event saved:", savedEvent.id);
 
         await insertScheduledMessage({
@@ -297,7 +288,6 @@ export const morningCheckin = async (req, res) => {
       }
     }
 
-    // calculate evening and night times
     const eveningTime = new Date();
     eveningTime.setTime(
       isFast
@@ -323,21 +313,17 @@ export const morningCheckin = async (req, res) => {
     console.log("Evening scheduled for:", eveningTime.toISOString());
     console.log("Night scheduled for:", nightTime.toISOString());
 
-    // insert evening checkin
     await insertScheduledMessage({
       user_id: userId,
       scheduled_for: eveningTime.toISOString(),
       message_type: "evening_checkin",
     });
-
-    // insert night checkin
     await insertScheduledMessage({
       user_id: userId,
       scheduled_for: nightTime.toISOString(),
       message_type: "night_checkin",
     });
 
-    // save user message
     const { error: convError } = await supabase.from("conversations").insert({
       user_id: userId,
       checkin_id: checkin.id,
@@ -345,7 +331,6 @@ export const morningCheckin = async (req, res) => {
       message,
       message_type: "morning",
     });
-
     if (convError)
       console.error("Conversation insert error:", JSON.stringify(convError));
 
@@ -417,4 +402,27 @@ export const pollMessages = async (req, res) => {
     .order("created_at", { ascending: true });
 
   res.json({ newMessages: newMessages || [] });
+};
+
+// ── Get context message for email reply deep link ─────────────
+// Called when user clicks "reply to mendi" in email
+// Returns the specific proactive message they're replying to
+export const getChatContext = async (req, res) => {
+  const userId = req.user.id;
+  const { checkin_id, type } = req.query;
+
+  if (!checkin_id || !type) return res.json({ message: null });
+
+  const { data } = await supabase
+    .from("conversations")
+    .select("message, created_at")
+    .eq("user_id", userId)
+    .eq("checkin_id", checkin_id)
+    .eq("role", "assistant")
+    .eq("message_type", type)
+    .order("created_at", { ascending: false })
+    .limit(1)
+    .single();
+
+  res.json({ message: data?.message || null });
 };

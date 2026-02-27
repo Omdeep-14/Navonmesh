@@ -77,13 +77,9 @@ const getRecommendationTypes = (moodScore) => {
 const getZomatoLink = (city, dish) => {
   const citySlug = city?.toLowerCase().trim().replace(/\s+/g, "-") || "";
   const dishQuery = encodeURIComponent(dish || "");
-
-  if (citySlug && dishQuery) {
+  if (citySlug && dishQuery)
     return `https://www.zomato.com/${citySlug}/delivery?query=${dishQuery}`;
-  }
-  if (citySlug) {
-    return `https://www.zomato.com/${citySlug}`;
-  }
+  if (citySlug) return `https://www.zomato.com/${citySlug}`;
   return "https://www.zomato.com";
 };
 
@@ -109,39 +105,25 @@ const generateRecommendation = async (
       Instead hint at it like a friend — describe the vibe or feeling of the movie, then casually drop the name at the end if it flows.
       Match language: ${language}. Age: ${user.age || "unknown"}.
       Sad/stressed → something cozy, funny, or comforting — NOT heavy or sad.
-      Example: "there's this movie that's genuinely just warm and stupid in the best way, it's called XYZ, just put it on" 
-      or "honestly something light and dumb is what you need tonight — have you seen XYZ?"`,
+      Example: "there's this movie that's genuinely just warm and stupid in the best way, it's called XYZ, just put it on"`,
 
     food: `FOOD: Suggest a type of food or cuisine that fits their mood — naturally, like a friend casually mentioning it.
-      Don't just say "order something" — actually hint at what kind of food, like "something warm and soupy" or "honestly biryani energy tonight".
+      Don't just say "order something" — actually hint at what kind of food.
       ${location ? `They're in ${location} — think about what's common/available there but don't mention the location name.` : ""}
-      Sad/stressed → comfort food vibes: something warm, filling, familiar. Think dal chawal energy, hot soup, maggi, biryani, whatever fits.
-      Happy → something fun or celebratory: pizza, chaat, ice cream, whatever feels like a treat.
-      
-      The key: make it feel like a natural mention, not a prescription.
-      Good examples: 
-        "also feels like a biryani kind of night honestly"
-        "maybe get something warm and soupy, idk just feels right"
-        "this is a chaat moment if I've ever seen one"
-        "treat yourself to something good tonight, pizza or whatever makes you happy"
-      BAD examples (never do this):
-        "I recommend you eat Pav Bhaji"
-        "you should order some food"
-        "get yourself something to eat"
-        "order something indulgent" (too vague, actually mention a food type)`,
+      Sad/stressed → comfort food: dal chawal energy, hot soup, biryani, whatever fits.
+      Happy → something fun: pizza, chaat, ice cream.
+      Good: "also feels like a biryani kind of night honestly" Bad: "I recommend you eat Pav Bhaji"`,
   };
 
   const recommendationsNeeded = types
     .map((t) => typeInstructions[t])
     .join("\n\n");
-
   const morningMoodContext = checkin
     ? `They started the day feeling ${checkin.mood_label} (${checkin.mood_score}/10).`
     : "";
 
   const age = user.age;
   const score = nightMood.mood_score;
-
   const ageBucket = !age
     ? "adult"
     : age <= 15
@@ -153,7 +135,6 @@ const generateRecommendation = async (
           : age <= 55
             ? "midlife"
             : "senior";
-
   const moodEnergy = score <= 4 ? "low" : score <= 7 ? "okay" : "good";
 
   const vibeMap = {
@@ -189,40 +170,34 @@ const generateRecommendation = async (
   const response = await llm.invoke([
     new SystemMessage(`You are texting ${user.name} like a real close friend late at night.
       They've opened up to you and now you want to wrap up with something thoughtful.
-      
       Their current mood: ${nightMood.mood_label} (${nightMood.mood_score}/10).
       ${morningMoodContext}
       Age: ${user.age || "unknown"}. Language they use: ${language}.
-      
       Your vibe for this message: ${messageVibe}
-      Let the vibe shape HOW you say things, not what you say.
-      
       Here's what to weave into one natural message:
       ${recommendationsNeeded}
-      
-      RULES — read carefully:
-      - Write ONE flowing message like a text, not a list or review
-      - Song name can be dropped naturally — friends do this
-      - Movie: hint at it casually, don't make it sound like a review
+      RULES:
+      - Write ONE flowing message like a text, not a list
+      - Song name can be dropped naturally
+      - Movie: hint at it casually
       - Food: mention a type naturally — "biryani energy tonight" not "I recommend biryani"
       - No bullet points, no bold, no "I recommend", no "you should"
       - Max 3-4 sentences total
-      - The mood + age vibe should come through in your tone naturally
       - End light — like wrapping up a good late night conversation`),
     new HumanMessage(
       `Based on our conversation tonight, what would you suggest for me?`,
     ),
   ]);
 
-  // ── Extract dish name from generated message for Zomato search ──
+  // ── Extract dish name for Zomato search ──
   let dish = "";
   if (types.includes("food")) {
     try {
       const dishResponse = await llm.invoke([
         new SystemMessage(`Extract ONLY the food or dish type mentioned in this message as a short search term (1-3 words max).
-          Return ONLY a JSON object like: { "dish": "biryani" } or { "dish": "hot soup" } or { "dish": "chaat" }
+          Return ONLY a JSON object like: { "dish": "biryani" } or { "dish": "hot soup" }
           If no specific food is mentioned, return { "dish": "" }
-          Just the food name — no extra words, no explanation.`),
+          Just the food name — no extra words.`),
         new HumanMessage(response.content),
       ]);
       const cleaned = dishResponse.content.replace(/```json|```/g, "").trim();
@@ -233,13 +208,7 @@ const generateRecommendation = async (
     console.log(`Dish extracted for Zomato: "${dish}"`);
   }
 
-  return {
-    message: response.content,
-    types,
-    mood: nightMood,
-    language,
-    dish,
-  };
+  return { message: response.content, types, mood: nightMood, language, dish };
 };
 
 // ── Mood accent colors ────────────────────────────────────────
@@ -255,7 +224,6 @@ const getMoodAccent = (moodLabel) => {
   return accents[moodLabel] || accents.okay;
 };
 
-// ── Pill badge helper ─────────────────────────────────────────
 const typePill = (label, emoji) =>
   `<span style="display:inline-block;background:rgba(255,255,255,0.05);border:1px solid rgba(255,255,255,0.09);color:#64748b;font-size:11px;font-weight:600;letter-spacing:1.2px;text-transform:uppercase;padding:5px 12px;border-radius:20px;margin-right:6px;margin-bottom:6px;">${emoji}&nbsp;${label}</span>`;
 
@@ -268,11 +236,11 @@ const buildRecommendationEmail = (
   city,
   dish,
   moodLabel,
+  checkinId,
 ) => {
   const hasMovie = types.includes("movie");
   const hasSong = types.includes("song");
   const hasFood = types.includes("food");
-
   const accent = getMoodAccent(moodLabel);
 
   const tagline =
@@ -290,17 +258,18 @@ const buildRecommendationEmail = (
     .filter(Boolean)
     .join("");
 
+  // ── Reply URL carries checkin context ──
+  const replyUrl = `${appUrl}/home?reply=${checkinId}&type=night_recommendation`;
   const zomatoUrl = getZomatoLink(city, dish);
 
   const zomatoButton = hasFood
     ? `
-              <!-- Zomato CTA -->
               <tr>
                 <td style="padding:0 44px 36px;">
                   <p style="color:#334155;font-size:11px;font-weight:700;letter-spacing:1.8px;text-transform:uppercase;margin:0 0 14px 0;">order it</p>
                   <a href="${zomatoUrl}"
                      style="display:inline-block;background:#e23744;color:#ffffff;text-decoration:none;font-size:14px;font-weight:700;padding:14px 28px;border-radius:12px;letter-spacing:0.1px;font-family:Helvetica,Arial,sans-serif;">
-                    🍴&nbsp; Order on Zomato${dish ? `&nbsp;·&nbsp;<span style="opacity:0.85;">${dish}</span>` : ""}
+                    🍴&nbsp; Order on Zomato${dish ? `&nbsp;·&nbsp;${dish}` : ""}
                   </a>
                 </td>
               </tr>
@@ -319,7 +288,6 @@ const buildRecommendationEmail = (
   <title>Mendi</title>
 </head>
 <body style="margin:0;padding:0;background:#06090f;font-family:Helvetica,Arial,sans-serif;-webkit-font-smoothing:antialiased;">
-
 <table width="100%" cellpadding="0" cellspacing="0" role="presentation" style="background:#06090f;padding:52px 20px 64px;">
   <tr>
     <td align="center">
@@ -328,7 +296,7 @@ const buildRecommendationEmail = (
         <!-- wordmark -->
         <tr>
           <td style="padding:0 4px 24px;">
-            <span style="font-size:11px;font-weight:800;letter-spacing:4px;text-transform:uppercase;background:linear-gradient(90deg,${accent.from},${accent.to});-webkit-background-clip:text;-webkit-text-fill-color:transparent;background-clip:text;">MENDI</span>
+            <span style="font-size:11px;font-weight:800;letter-spacing:4px;text-transform:uppercase;color:${accent.from};">MENDI</span>
           </td>
         </tr>
 
@@ -338,18 +306,15 @@ const buildRecommendationEmail = (
 
             <!-- mood gradient bar -->
             <table width="100%" cellpadding="0" cellspacing="0">
-              <tr>
-                <td style="height:2px;background:linear-gradient(90deg,${accent.from},${accent.to},transparent);"></td>
-              </tr>
+              <tr><td style="height:2px;background:linear-gradient(90deg,${accent.from},${accent.to},transparent);"></td></tr>
             </table>
 
-            <!-- header row -->
+            <!-- header -->
             <table width="100%" cellpadding="0" cellspacing="0">
               <tr>
                 <td style="padding:36px 44px 24px;">
                   <table cellpadding="0" cellspacing="0">
                     <tr>
-                      <!-- icon -->
                       <td style="vertical-align:top;padding-top:2px;">
                         <div style="width:42px;height:42px;background:linear-gradient(135deg,${accent.from},${accent.to});border-radius:13px;text-align:center;line-height:42px;font-size:19px;display:inline-block;">🌙</div>
                       </td>
@@ -365,58 +330,42 @@ const buildRecommendationEmail = (
 
             <!-- thin rule -->
             <table width="100%" cellpadding="0" cellspacing="0">
-              <tr>
-                <td style="padding:0 44px;">
-                  <div style="height:1px;background:#131c2e;"></div>
-                </td>
-              </tr>
+              <tr><td style="padding:0 44px;"><div style="height:1px;background:#131c2e;"></div></td></tr>
             </table>
 
-            <!-- greeting -->
+            <!-- greeting + message -->
             <table width="100%" cellpadding="0" cellspacing="0">
               <tr>
                 <td style="padding:32px 44px 6px;">
                   <p style="margin:0;color:#334155;font-size:11px;font-weight:700;letter-spacing:2.5px;text-transform:uppercase;">hey ${userName}</p>
                 </td>
               </tr>
-            </table>
-
-            <!-- message body -->
-            <table width="100%" cellpadding="0" cellspacing="0">
               <tr>
                 <td style="padding:12px 44px 28px;">
-                  <p style="margin:0;color:#94a3b8;font-size:16px;line-height:1.9;font-weight:400;">${messageText}</p>
+                  <p style="margin:0;color:#94a3b8;font-size:16px;line-height:1.9;">${messageText}</p>
                 </td>
               </tr>
             </table>
 
             <!-- pills -->
             <table width="100%" cellpadding="0" cellspacing="0">
-              <tr>
-                <td style="padding:0 44px 32px;">
-                  ${pills}
-                </td>
-              </tr>
+              <tr><td style="padding:0 44px 32px;">${pills}</td></tr>
             </table>
 
             <!-- rule -->
             <table width="100%" cellpadding="0" cellspacing="0">
-              <tr>
-                <td style="padding:0 44px;">
-                  <div style="height:1px;background:#131c2e;"></div>
-                </td>
-              </tr>
+              <tr><td style="padding:0 44px;"><div style="height:1px;background:#131c2e;"></div></td></tr>
             </table>
 
             ${zomatoButton}
 
-            <!-- continue CTA -->
+            <!-- reply CTA -->
             <table width="100%" cellpadding="0" cellspacing="0">
               <tr>
                 <td style="padding:32px 44px 40px;">
-                  <a href="${appUrl}/home"
+                  <a href="${replyUrl}"
                      style="display:inline-block;color:${accent.text};text-decoration:none;font-size:13px;font-weight:600;letter-spacing:0.3px;border-bottom:1px solid ${accent.text};padding-bottom:2px;font-family:Helvetica,Arial,sans-serif;">
-                    continue talking →
+                    reply to mendi →
                   </a>
                 </td>
               </tr>
@@ -430,12 +379,8 @@ const buildRecommendationEmail = (
           <td style="padding:24px 4px 0;">
             <table width="100%" cellpadding="0" cellspacing="0">
               <tr>
-                <td>
-                  <p style="margin:0;color:#1e293b;font-size:11px;">from your friend at mendi 💛</p>
-                </td>
-                <td align="right">
-                  <a href="${appUrl}/home" style="color:#1e293b;font-size:11px;text-decoration:none;">open app</a>
-                </td>
+                <td><p style="margin:0;color:#1e293b;font-size:11px;">from your friend at mendi 💛</p></td>
+                <td align="right"><a href="${appUrl}/home" style="color:#1e293b;font-size:11px;text-decoration:none;">open app</a></td>
               </tr>
             </table>
           </td>
@@ -445,12 +390,11 @@ const buildRecommendationEmail = (
     </td>
   </tr>
 </table>
-
 </body>
 </html>`;
 };
 
-// ── Main export: trigger recommendations after night reply ────
+// ── Main export ───────────────────────────────────────────────
 export const handleNightRecommendation = async (
   userId,
   checkinId,
@@ -499,6 +443,7 @@ export const handleNightRecommendation = async (
         user.city,
         result.dish,
         nightMood.mood_label,
+        checkinId, // ← passed so reply URL works
       ),
     });
 

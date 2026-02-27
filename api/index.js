@@ -13,7 +13,7 @@ const app = express();
 app.use(cors({ origin: process.env.FRONTEND_URL, credentials: true }));
 app.use(express.json()); // don't forget this or req.body will be undefined
 app.use("/api/v1/auth", authRouter);
-app.use("/api/v1/auth", genAiRouter);
+app.use("/api/v1", genAiRouter);
 
 console.log("URL:", process.env.SUPABASE_URL);
 console.log("KEY exists:", !!process.env.SUPABASE_SERVICE_ROLE_KEY);

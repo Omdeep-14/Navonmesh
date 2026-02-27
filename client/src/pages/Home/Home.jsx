@@ -831,33 +831,35 @@ export default function Home({ onNavigate }) {
     bottomRef.current?.scrollIntoView({ behavior: "smooth" });
   }, [messages, isTyping]);
 
-  // ── Poll for proactive messages ───────────────────────────
+  // ── Poll for new assistant messages ──────────────────────
+  const pollRef = useRef(null);
+  pollRef.current = async () => {
+    const token = localStorage.getItem("token");
+    const today = new Date().toISOString().split("T")[0];
+    try {
+      const res = await fetch(
+        `${import.meta.env.VITE_API_URL}/api/v1/chat/poll?date=${today}`,
+        { headers: { Authorization: `Bearer ${token}` } },
+      );
+      const data = await res.json();
+      if (data.newMessages?.length) {
+        const newMsgs = data.newMessages.map((m) => ({
+          id: m.id,
+          role: m.role,
+          content: m.message,
+          timestamp: new Date(m.created_at).getTime(),
+        }));
+        setMessages((prev) => {
+          const ids = new Set(prev.map((m) => m.id));
+          return [...prev, ...newMsgs.filter((m) => !ids.has(m.id))];
+        });
+      }
+    } catch {}
+  };
+
   useEffect(() => {
     if (!chatOpen) return;
-    const poll = async () => {
-      const token = localStorage.getItem("token");
-      const today = new Date().toISOString().split("T")[0];
-      try {
-        const res = await fetch(
-          `${import.meta.env.VITE_API_URL}/api/v1/chat/poll?date=${today}`,
-          { headers: { Authorization: `Bearer ${token}` } },
-        );
-        const data = await res.json();
-        if (data.newMessages?.length) {
-          const newMsgs = data.newMessages.map((m) => ({
-            id: m.id,
-            role: m.role,
-            content: m.message,
-            timestamp: new Date(m.created_at).getTime(),
-          }));
-          setMessages((prev) => {
-            const ids = new Set(prev.map((m) => m.id));
-            return [...prev, ...newMsgs.filter((m) => !ids.has(m.id))];
-          });
-        }
-      } catch {}
-    };
-    const id = setInterval(poll, 30_000);
+    const id = setInterval(() => pollRef.current?.(), 30_000);
     return () => clearInterval(id);
   }, [chatOpen]);
 
@@ -922,14 +924,8 @@ export default function Home({ onNavigate }) {
         { id: Date.now(), mood, preview: text, timestamp: Date.now() },
         ...prev,
       ]);
-      const aiMsg = {
-        id: Date.now() + 1,
-        role: "assistant",
-        content: data.reply,
-        timestamp: Date.now(),
-      };
-      setMessages((prev) => [...prev, aiMsg]);
-      setAllMessages((prev) => [...prev, aiMsg]);
+      // Poll immediately so the AI reply comes in with its real DB uuid — prevents duplicates
+      await pollRef.current?.();
     } catch {
       const err = {
         id: Date.now() + 1,

@@ -390,7 +390,7 @@ export const pollMessages = async (req, res) => {
 
   if (!checkin) return res.json({ newMessages: [] });
 
-  const since = new Date(Date.now() - 35_000).toISOString();
+  const since = new Date(Date.now() - 60_000).toISOString();
 
   const { data: newMessages } = await supabase
     .from("conversations")
@@ -405,15 +405,13 @@ export const pollMessages = async (req, res) => {
 };
 
 // ── Get context message for email reply deep link ─────────────
-// Called when user clicks "reply to mendi" in email
-// Returns the specific proactive message they're replying to
 export const getChatContext = async (req, res) => {
   const userId = req.user.id;
   const { checkin_id, type } = req.query;
 
   if (!checkin_id || !type) return res.json({ message: null });
 
-  const { data } = await supabase
+  const { data, error } = await supabase
     .from("conversations")
     .select("message, created_at")
     .eq("user_id", userId)
@@ -421,8 +419,8 @@ export const getChatContext = async (req, res) => {
     .eq("role", "assistant")
     .eq("message_type", type)
     .order("created_at", { ascending: false })
-    .limit(1)
-    .single();
+    .limit(1);
 
-  res.json({ message: data?.message || null });
+  if (error) console.error("getChatContext error:", error.message);
+  res.json({ message: data?.[0]?.message || null });
 };

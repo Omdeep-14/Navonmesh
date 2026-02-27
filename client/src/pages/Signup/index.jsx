@@ -55,11 +55,14 @@ function Signup({ onNavigate }) {
     setError("");
     const timezone = Intl.DateTimeFormat().resolvedOptions().timeZone;
     try {
-      const res = await fetch("/api/v1/auth/signup", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ ...form, timezone, age: parseInt(form.age) }),
-      });
+      const res = await fetch(
+        `${import.meta.env.VITE_API_URL}/api/v1/auth/signup`,
+        {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ ...form, timezone, age: parseInt(form.age) }),
+        },
+      );
       const data = await res.json();
       if (!res.ok) {
         setError(data.error || "Something went wrong");
@@ -67,7 +70,7 @@ function Signup({ onNavigate }) {
       }
       localStorage.setItem("token", data.token);
       localStorage.setItem("user", JSON.stringify(data.user));
-      onNavigate("home");
+      window.location.href = "/home";
     } catch {
       setError("Could not connect to server");
     } finally {
@@ -87,12 +90,16 @@ function Signup({ onNavigate }) {
             className="inline-flex items-center gap-2 mb-6"
           >
             <span className="text-3xl">🌙</span>
-            <span className="text-2xl font-bold font-serif text-amber-300">Mendi</span>
+            <span className="text-2xl font-bold font-serif text-amber-300">
+              Mendi
+            </span>
           </button>
           <h1 className="text-3xl font-bold font-serif text-white mb-2">
             Let's get you set up
           </h1>
-          <p className="text-slate-400 text-sm">Your companion is ready to meet you</p>
+          <p className="text-slate-400 text-sm">
+            Your companion is ready to meet you
+          </p>
         </div>
 
         <StepIndicator currentStep={step} />

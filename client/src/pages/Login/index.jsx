@@ -48,10 +48,16 @@ function Login({ onNavigate }) {
             className="inline-flex items-center gap-2 mb-6"
           >
             <span className="text-3xl">🌙</span>
-            <span className="text-2xl font-bold font-serif text-amber-300">Mendi</span>
+            <span className="text-2xl font-bold font-serif text-amber-300">
+              Mendi
+            </span>
           </button>
-          <h1 className="text-3xl font-bold font-serif text-white mb-2">Welcome back</h1>
-          <p className="text-slate-400 text-sm">Your companion has been waiting for you</p>
+          <h1 className="text-3xl font-bold font-serif text-white mb-2">
+            Welcome back
+          </h1>
+          <p className="text-slate-400 text-sm">
+            Your companion has been waiting for you
+          </p>
         </div>
 
         <div className="bg-slate-800 bg-opacity-80 border border-slate-700 rounded-3xl p-8 shadow-2xl backdrop-blur-sm">

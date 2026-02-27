@@ -12,7 +12,35 @@ const llm = new ChatGroq({
   temperature: 0.8,
 });
 
-// helper to extract event details from message using AI
+// ── Fetch today's conversation history from DB ────────────────
+const getConversationHistory = async (userId, checkinId) => {
+  const { data } = await supabase
+    .from("conversations")
+    .select("role, message")
+    .eq("user_id", userId)
+    .eq("checkin_id", checkinId)
+    .order("created_at", { ascending: true });
+
+  return data || [];
+};
+
+// ── Build LangChain message array from history ────────────────
+const buildMessages = (systemPrompt, history, currentMessage) => {
+  const messages = [new SystemMessage(systemPrompt)];
+
+  history.forEach((msg) => {
+    if (msg.role === "user") {
+      messages.push(new HumanMessage(msg.message));
+    } else {
+      messages.push(new AIMessage(msg.message));
+    }
+  });
+
+  messages.push(new HumanMessage(currentMessage));
+  return messages;
+};
+
+// ── Extract events from message ───────────────────────────────
 const extractEvents = async (message) => {
   const response = await llm.invoke([
     new SystemMessage(`You are a helper that extracts scheduled events from a message.
@@ -32,7 +60,7 @@ const extractEvents = async (message) => {
   }
 };
 
-// helper to detect mood
+// ── Detect mood ───────────────────────────────────────────────
 const detectMood = async (message) => {
   const response = await llm.invoke([
     new SystemMessage(`You are a mood detector. Given a message, return ONLY a JSON object like:
@@ -50,6 +78,7 @@ const detectMood = async (message) => {
   }
 };
 
+// ── Main controller ───────────────────────────────────────────
 export const morningCheckin = async (req, res) => {
   try {
     const { message } = req.body;
@@ -57,6 +86,13 @@ export const morningCheckin = async (req, res) => {
     const today = new Date().toISOString().split("T")[0];
 
     if (!message) return res.status(400).json({ error: "Message is required" });
+
+    // get user info
+    const { data: user } = await supabase
+      .from("users")
+      .select("name, city, area")
+      .eq("id", userId)
+      .single();
 
     // check if already checked in today
     const { data: existingCheckin } = await supabase
@@ -66,24 +102,59 @@ export const morningCheckin = async (req, res) => {
       .eq("checkin_date", today)
       .single();
 
+    // ── Already checked in — continue conversation with memory ──
     if (existingCheckin) {
-      return res.status(400).json({ error: "Already checked in today" });
+      const history = await getConversationHistory(userId, existingCheckin.id);
+
+      const systemPrompt = `You are a warm, empathetic mental health companion — like a close friend, not a therapist.
+        The user's name is ${user.name}.
+        They checked in this morning feeling ${existingCheckin.mood_label} (${existingCheckin.mood_score}/10).
+        You have been talking with them today and remember everything said in this conversation.
+        Guidelines:
+        - Be warm, human, and conversational — not clinical
+        - Never mention check-ins, sessions, or anything technical
+        - Reference what they said earlier if it is relevant — show you were listening
+        - If they seem to be getting more distressed, be extra gentle
+        - Keep it short (2-3 sentences max)`;
+
+      const aiResponse = await llm.invoke(
+        buildMessages(systemPrompt, history, message),
+      );
+
+      await supabase.from("conversations").insert([
+        {
+          user_id: userId,
+          checkin_id: existingCheckin.id,
+          role: "user",
+          message,
+          message_type: "morning",
+        },
+        {
+          user_id: userId,
+          checkin_id: existingCheckin.id,
+          role: "assistant",
+          message: aiResponse.content,
+          message_type: "morning",
+        },
+      ]);
+
+      return res.json({
+        reply: aiResponse.content,
+        checkin_id: existingCheckin.id,
+        mood: {
+          mood_label: existingCheckin.mood_label,
+          mood_score: existingCheckin.mood_score,
+        },
+        events_detected: 0,
+      });
     }
 
-    // get user info for personalization
-    const { data: user } = await supabase
-      .from("users")
-      .select("name, city, area")
-      .eq("id", userId)
-      .single();
-
-    // detect mood and extract events in parallel
+    // ── First checkin of the day ──
     const [mood, events] = await Promise.all([
       detectMood(message),
       extractEvents(message),
     ]);
 
-    // save checkin
     const { data: checkin, error: checkinError } = await supabase
       .from("daily_checkins")
       .insert({
@@ -103,7 +174,7 @@ export const morningCheckin = async (req, res) => {
     if (events.length > 0) {
       for (const event of events) {
         const eventTime = new Date(event.time);
-        const followUpAt = new Date(eventTime.getTime() + 2 * 60 * 60 * 1000); // +2 hours
+        const followUpAt = new Date(eventTime.getTime() + 2 * 60 * 60 * 1000);
 
         const { data: savedEvent } = await supabase
           .from("user_events")
@@ -117,7 +188,6 @@ export const morningCheckin = async (req, res) => {
           .select()
           .single();
 
-        // schedule event follow-up message
         await supabase.from("scheduled_messages").insert({
           user_id: userId,
           event_id: savedEvent.id,
@@ -130,7 +200,6 @@ export const morningCheckin = async (req, res) => {
     // schedule evening and night check-ins
     const eveningTime = new Date();
     eveningTime.setHours(19, 0, 0, 0);
-
     const nightTime = new Date();
     nightTime.setHours(22, 0, 0, 0);
 
@@ -147,33 +216,35 @@ export const morningCheckin = async (req, res) => {
       },
     ]);
 
-    // save user message to conversations
+    // save user message first so it's included in history
     await supabase.from("conversations").insert({
       user_id: userId,
       checkin_id: checkin.id,
       role: "user",
-      message: message,
+      message,
       message_type: "morning",
     });
 
-    // generate AI response
-    const aiResponse = await llm.invoke([
-      new SystemMessage(`You are a warm, empathetic mental health companion — like a close friend, not a therapist.
-        The user's name is ${user.name}.
-        Today they checked in feeling ${mood.mood_label} (${mood.mood_score}/10).
-        ${events.length > 0 ? `They have these events today: ${events.map((e) => e.title).join(", ")}` : ""}
-        
-        Guidelines:
-        - Be warm, human, and conversational — not clinical
-        - Acknowledge their feelings genuinely
-        - If they have events, gently reassure them
-        - Keep it short (3-4 sentences max)
-        - Don't use bullet points or lists
-        - End with something encouraging for their day`),
-      new HumanMessage(message),
-    ]);
+    // fetch history (just this first message)
+    const history = await getConversationHistory(userId, checkin.id);
 
-    // save AI response to conversations
+    const systemPrompt = `You are a warm, empathetic mental health companion — like a close friend, not a therapist.
+      The user's name is ${user.name}.
+      Today they checked in feeling ${mood.mood_label} (${mood.mood_score}/10).
+      ${events.length > 0 ? `They have these events today: ${events.map((e) => e.title).join(", ")}` : ""}
+      Guidelines:
+      - Be warm, human, and conversational — not clinical
+      - Acknowledge their feelings genuinely
+      - If they have events, gently reassure them
+      - Keep it short (3-4 sentences max)
+      - Don't use bullet points or lists
+      - End with something encouraging for their day`;
+
+    const aiResponse = await llm.invoke(
+      buildMessages(systemPrompt, history, message),
+    );
+
+    // save AI response
     await supabase.from("conversations").insert({
       user_id: userId,
       checkin_id: checkin.id,

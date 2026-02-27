@@ -1,7 +1,8 @@
 import FloatingOrb from "../../components/shared/FloatingOrb";
+import SahaayLogo from "../../components/shared/SahaayLogo";
 import HeroSection from "./HeroSection";
 import FeaturesSection from "./FeaturesSection";
-import TestimonialsSection from "./TestimonialsSection";
+import HowItWorksSection from "./HowItWorksSection";
 import CTASection from "./CTASection";
 
 function Landing({ onNavigate }) {
@@ -17,8 +18,8 @@ function Landing({ onNavigate }) {
       {/* Navbar */}
       <nav className="relative flex items-center justify-between px-8 py-6 max-w-6xl mx-auto" style={{ zIndex: 10 }}>
         <div className="flex items-center gap-2">
-          <span className="text-2xl">🌙</span>
-          <span className="text-xl font-bold font-serif text-amber-300">Mendi</span>
+          <SahaayLogo size={36} />
+          <span className="text-xl font-bold font-serif text-amber-300">Sahaay</span>
         </div>
         <div className="flex items-center gap-3">
           <button
@@ -38,11 +39,11 @@ function Landing({ onNavigate }) {
 
       <div style={{ position: "relative", zIndex: 10 }}>
         <HeroSection onNavigate={onNavigate} />
-        <FeaturesSection />
-        <TestimonialsSection />
+        <FeaturesSection onNavigate={onNavigate} />
+        <HowItWorksSection onNavigate={onNavigate} />
         <CTASection onNavigate={onNavigate} />
         <footer className="text-center pb-12 text-slate-600 text-sm">
-          <p>Made with 💛 at the hackathon · Mendi 2024</p>
+          <p>Made with 💛 at the hackathon · Sahaay 2024</p>
         </footer>
       </div>
     </div>

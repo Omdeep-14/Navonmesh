@@ -3,6 +3,7 @@ import StepIndicator from "./StepIndicator";
 import StepAccount from "./StepAccount";
 import StepAbout from "./StepAbout";
 import StepLocation from "./StepLocation";
+import SahaayLogo from "../../components/shared/SahaayLogo";
 
 function Signup({ onNavigate }) {
   const [step, setStep] = useState(0);
@@ -51,25 +52,25 @@ function Signup({ onNavigate }) {
 
       <div className="w-full text-center pt-10 pb-4" style={{ position: "relative", zIndex: 10 }}>
         <button onClick={() => onNavigate("landing")} className="inline-flex items-center gap-2 mb-2">
-          <span className="text-3xl">🌙</span>
-          <span className="text-2xl font-bold font-serif text-amber-300">Mendi</span>
+          <SahaayLogo size={40} />
+          <span className="text-2xl font-bold font-serif text-amber-300">Sahaay</span>
         </button>
         <h1 className="text-4xl font-bold text-white mt-2">
           Welcome to{" "}
           <span className="text-transparent bg-clip-text" style={{ backgroundImage: "linear-gradient(to right, #fbbf24, #fb7185)" }}>
-            Mendi
+            Sahaay
           </span>
         </h1>
-        <p className="text-slate-400 text-sm mt-1" style={{ fontWeight: 300 }}>Your AI-powered mental wellness companion</p>
+        <p className="text-slate-400 text-sm mt-1" style={{ fontWeight: 300 }}>Your Your AI-powered mental wellness companion</p>
       </div>
 
       <div
-        className="glass-card w-full mb-8"
-        style={{ position: "relative", zIndex: 10, maxWidth: "500px", margin: "0 1rem 2rem 1rem", padding: "2rem" }}
+        className="glass-card"
+        style={{ position: "relative", zIndex: 10, width: "100%", maxWidth: "460px", margin: "1.5rem auto 2rem auto", padding: "2rem 2.25rem", boxSizing: "border-box" }}
       >
         <div className="flex p-1 mb-5 rounded-xl" style={{ background: "rgba(255,255,255,0.04)", border: "1px solid rgba(255,255,255,0.07)" }}>
-          <button className="glass-tab glass-tab-inactive" onClick={() => onNavigate("login")}>Login</button>
-          <button className="glass-tab glass-tab-active">Sign Up</button>
+          <button className="glass-tab glass-tab-inactive" style={{ flex: 1, minWidth: 0 }} onClick={() => onNavigate("login")}>Login</button>
+          <button className="glass-tab glass-tab-active" style={{ flex: 1, minWidth: 0 }}>Sign Up</button>
         </div>
 
         <div className="flex items-center justify-between mb-1.5">

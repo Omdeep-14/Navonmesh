@@ -1,6 +1,27 @@
 import FeatureCard from "./FeatureCard";
 
-const FeaturesSection = () => (
+const features = [
+  {
+    image: "https://images.unsplash.com/photo-1506905925346-21bda4d32df4?w=600&q=80",
+    tag: "Daily Ritual",
+    title: "Start your morning grounded",
+    desc: "A gentle check-in each morning helps you name your mood, set an intention, and face the day with clarity instead of chaos.",
+  },
+  {
+    image: "https://images.unsplash.com/photo-1544367567-0f2fcb009e0b?w=600&q=80",
+    tag: "Mindfulness",
+    title: "Breathe through the hard moments",
+    desc: "When stress spikes, Mendi guides you through breathing exercises and grounding techniques proven to calm the nervous system fast.",
+  },
+  {
+    image: "https://images.unsplash.com/photo-1518531933037-91b2f5f229cc?w=600&q=80",
+    tag: "Rest & Recovery",
+    title: "Wind down and sleep better",
+    desc: "Mendi tracks your energy through the day and meets you at night with calming rituals, journaling prompts, or just a quiet presence.",
+  },
+];
+
+const FeaturesSection = ({ onNavigate }) => (
   <section className="relative z-10 max-w-6xl mx-auto px-8 pb-32">
     <h2 className="text-4xl font-bold font-serif text-center text-white mb-4">
       More than a chatbot
@@ -9,21 +30,9 @@ const FeaturesSection = () => (
       Mendi doesn't wait for you to come to it. It reaches out, remembers, and cares.
     </p>
     <div className="grid md:grid-cols-3 gap-6">
-      <FeatureCard
-        emoji="🌅"
-        title="Morning check-ins"
-        desc="Tell Mendi how you're feeling each morning. It listens, understands your mood, and sets the tone for your day."
-      />
-      <FeatureCard
-        emoji="🔔"
-        title="Proactive follow-ups"
-        desc="Mention a stressful meeting? Mendi will automatically check back in after it ends — without you having to remember."
-      />
-      <FeatureCard
-        emoji="🌙"
-        title="Evening comfort"
-        desc="If your day was rough, Mendi shows up at night with movie suggestions, music, or food delivery links to help you unwind."
-      />
+      {features.map((f) => (
+        <FeatureCard key={f.title} {...f} onNavigate={onNavigate} />
+      ))}
     </div>
   </section>
 );

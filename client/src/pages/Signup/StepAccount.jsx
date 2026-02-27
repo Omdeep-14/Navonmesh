@@ -19,7 +19,7 @@ const StepAccount = ({ form, error, onChange, onNext, onNavigate }) => (
       </div>
     )}
     <div className="pt-1">
-      <button type="submit" className="mendi-btn mendi-btn-amber mendi-btn-block" style={{ justifyContent: "center" }}>
+      <button type="submit" className="mendi-btn mendi-btn-amber mendi-btn-block" style={{ justifyContent: "center", width: "100%", boxSizing: "border-box" }}>
         <span>Continue →</span>
       </button>
     </div>

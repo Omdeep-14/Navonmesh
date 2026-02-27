@@ -73,6 +73,20 @@ const getRecommendationTypes = (moodScore) => {
   return ["song"];
 };
 
+// ── Build Zomato URL from city + dish ────────────────────────
+const getZomatoLink = (city, dish) => {
+  const citySlug = city?.toLowerCase().trim().replace(/\s+/g, "-") || "";
+  const dishQuery = encodeURIComponent(dish || "");
+
+  if (citySlug && dishQuery) {
+    return `https://www.zomato.com/${citySlug}/delivery?query=${dishQuery}`;
+  }
+  if (citySlug) {
+    return `https://www.zomato.com/${citySlug}`;
+  }
+  return "https://www.zomato.com";
+};
+
 // ── Generate the full recommendation message ──────────────────
 const generateRecommendation = async (
   user,
@@ -125,7 +139,6 @@ const generateRecommendation = async (
     ? `They started the day feeling ${checkin.mood_label} (${checkin.mood_score}/10).`
     : "";
 
-  // derive vibe from age + mood together
   const age = user.age;
   const score = nightMood.mood_score;
 
@@ -201,95 +214,240 @@ const generateRecommendation = async (
     ),
   ]);
 
+  // ── Extract dish name from generated message for Zomato search ──
+  let dish = "";
+  if (types.includes("food")) {
+    try {
+      const dishResponse = await llm.invoke([
+        new SystemMessage(`Extract ONLY the food or dish type mentioned in this message as a short search term (1-3 words max).
+          Return ONLY a JSON object like: { "dish": "biryani" } or { "dish": "hot soup" } or { "dish": "chaat" }
+          If no specific food is mentioned, return { "dish": "" }
+          Just the food name — no extra words, no explanation.`),
+        new HumanMessage(response.content),
+      ]);
+      const cleaned = dishResponse.content.replace(/```json|```/g, "").trim();
+      dish = JSON.parse(cleaned).dish || "";
+    } catch {
+      dish = "";
+    }
+    console.log(`Dish extracted for Zomato: "${dish}"`);
+  }
+
   return {
     message: response.content,
     types,
     mood: nightMood,
     language,
+    dish,
   };
 };
 
+// ── Mood accent colors ────────────────────────────────────────
+const getMoodAccent = (moodLabel) => {
+  const accents = {
+    happy: { from: "#f59e0b", to: "#ef4444", text: "#fbbf24" },
+    okay: { from: "#6366f1", to: "#8b5cf6", text: "#a78bfa" },
+    anxious: { from: "#8b5cf6", to: "#6366f1", text: "#c4b5fd" },
+    sad: { from: "#3b82f6", to: "#6366f1", text: "#93c5fd" },
+    stressed: { from: "#ec4899", to: "#8b5cf6", text: "#f9a8d4" },
+    angry: { from: "#ef4444", to: "#f97316", text: "#fca5a5" },
+  };
+  return accents[moodLabel] || accents.okay;
+};
+
+// ── Pill badge helper ─────────────────────────────────────────
+const typePill = (label, emoji) =>
+  `<span style="display:inline-block;background:rgba(255,255,255,0.05);border:1px solid rgba(255,255,255,0.09);color:#64748b;font-size:11px;font-weight:600;letter-spacing:1.2px;text-transform:uppercase;padding:5px 12px;border-radius:20px;margin-right:6px;margin-bottom:6px;">${emoji}&nbsp;${label}</span>`;
+
 // ── Build recommendation email HTML ──────────────────────────
-const buildRecommendationEmail = (userName, messageText, types, appUrl) => {
+const buildRecommendationEmail = (
+  userName,
+  messageText,
+  types,
+  appUrl,
+  city,
+  dish,
+  moodLabel,
+) => {
   const hasMovie = types.includes("movie");
   const hasSong = types.includes("song");
   const hasFood = types.includes("food");
 
+  const accent = getMoodAccent(moodLabel);
+
   const tagline =
     hasMovie && hasSong && hasFood
-      ? "a song, a movie & something to eat 🌙"
+      ? "a song, a film &amp; something to eat"
       : hasSong && hasFood
-        ? "a song & something to eat ✨"
-        : "a song for tonight 🎵";
+        ? "a song &amp; something to eat"
+        : "a song for tonight";
 
-  return `
-    <!DOCTYPE html>
-    <html>
-      <head>
-        <meta charset="utf-8" />
-        <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-        <title>Mendi</title>
-      </head>
-      <body style="margin:0;padding:0;background-color:#0f172a;font-family:'DM Sans',Helvetica,Arial,sans-serif;">
-        <table width="100%" cellpadding="0" cellspacing="0" style="background-color:#0f172a;padding:40px 20px;">
-          <tr>
-            <td align="center">
-              <table width="560" cellpadding="0" cellspacing="0" style="background-color:#1e293b;border-radius:16px;overflow:hidden;max-width:560px;width:100%;">
-                
-                <!-- Header -->
-                <tr>
-                  <td style="background:linear-gradient(135deg,#1e293b 0%,#0f172a 100%);padding:32px 40px 24px;border-bottom:1px solid #334155;">
-                    <table width="100%" cellpadding="0" cellspacing="0">
-                      <tr>
-                        <td>
-                          <div style="width:40px;height:40px;background:linear-gradient(135deg,#fbbf24,#f87171);border-radius:50%;display:inline-block;line-height:40px;text-align:center;font-size:18px;">🌙</div>
-                        </td>
-                        <td style="padding-left:12px;vertical-align:middle;">
-                          <span style="color:#fbbf24;font-size:22px;font-weight:700;letter-spacing:-0.5px;">Mendi</span>
-                          <p style="color:#64748b;font-size:12px;margin:2px 0 0 0;">picked ${tagline} for you</p>
-                        </td>
-                      </tr>
-                    </table>
-                  </td>
-                </tr>
+  const pills = [
+    hasSong && typePill("song", "🎵"),
+    hasMovie && typePill("film", "🎬"),
+    hasFood && typePill("food", "🍽️"),
+  ]
+    .filter(Boolean)
+    .join("");
 
-                <!-- Body -->
-                <tr>
-                  <td style="padding:36px 40px;">
-                    <p style="color:#94a3b8;font-size:13px;margin:0 0 16px 0;text-transform:uppercase;letter-spacing:1px;">hey ${userName} 🌙</p>
-                    <p style="color:#f1f5f9;font-size:18px;line-height:1.8;margin:0 0 32px 0;">${messageText}</p>
+  const zomatoUrl = getZomatoLink(city, dish);
 
-                    <!-- CTA -->
-                    <table cellpadding="0" cellspacing="0">
-                      <tr>
-                        <td style="background:linear-gradient(135deg,#fbbf24,#f87171);border-radius:10px;padding:1px;">
-                          <a href="${appUrl}/home"
-                             style="display:inline-block;background:#1e293b;color:#fbbf24;text-decoration:none;font-size:14px;font-weight:600;padding:12px 28px;border-radius:9px;letter-spacing:0.3px;">
-                            Continue talking →
-                          </a>
-                        </td>
-                      </tr>
-                    </table>
-                  </td>
-                </tr>
+  const zomatoButton = hasFood
+    ? `
+              <!-- Zomato CTA -->
+              <tr>
+                <td style="padding:0 44px 36px;">
+                  <p style="color:#334155;font-size:11px;font-weight:700;letter-spacing:1.8px;text-transform:uppercase;margin:0 0 14px 0;">order it</p>
+                  <a href="${zomatoUrl}"
+                     style="display:inline-block;background:#e23744;color:#ffffff;text-decoration:none;font-size:14px;font-weight:700;padding:14px 28px;border-radius:12px;letter-spacing:0.1px;font-family:Helvetica,Arial,sans-serif;">
+                    🍴&nbsp; Order on Zomato${dish ? `&nbsp;·&nbsp;<span style="opacity:0.85;">${dish}</span>` : ""}
+                  </a>
+                </td>
+              </tr>
+              <tr>
+                <td style="padding:0 44px 8px;">
+                  <div style="height:1px;background:linear-gradient(90deg,#1e293b,transparent);"></div>
+                </td>
+              </tr>`
+    : "";
 
-                <!-- Footer -->
-                <tr>
-                  <td style="padding:20px 40px 28px;border-top:1px solid #334155;">
-                    <p style="color:#475569;font-size:12px;margin:0;line-height:1.6;">
-                      From your friend at Mendi 💛<br/>
-                      <a href="${appUrl}/home" style="color:#64748b;text-decoration:underline;">Open Mendi</a>
-                    </p>
-                  </td>
-                </tr>
+  return `<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8"/>
+  <meta name="viewport" content="width=device-width,initial-scale=1.0"/>
+  <title>Mendi</title>
+</head>
+<body style="margin:0;padding:0;background:#06090f;font-family:Helvetica,Arial,sans-serif;-webkit-font-smoothing:antialiased;">
 
-              </table>
-            </td>
-          </tr>
-        </table>
-      </body>
-    </html>
-  `;
+<table width="100%" cellpadding="0" cellspacing="0" role="presentation" style="background:#06090f;padding:52px 20px 64px;">
+  <tr>
+    <td align="center">
+      <table width="520" cellpadding="0" cellspacing="0" role="presentation" style="max-width:520px;width:100%;">
+
+        <!-- wordmark -->
+        <tr>
+          <td style="padding:0 4px 24px;">
+            <span style="font-size:11px;font-weight:800;letter-spacing:4px;text-transform:uppercase;background:linear-gradient(90deg,${accent.from},${accent.to});-webkit-background-clip:text;-webkit-text-fill-color:transparent;background-clip:text;">MENDI</span>
+          </td>
+        </tr>
+
+        <!-- card -->
+        <tr>
+          <td style="background:#0c1220;border-radius:24px;border:1px solid #131c2e;overflow:hidden;">
+
+            <!-- mood gradient bar -->
+            <table width="100%" cellpadding="0" cellspacing="0">
+              <tr>
+                <td style="height:2px;background:linear-gradient(90deg,${accent.from},${accent.to},transparent);"></td>
+              </tr>
+            </table>
+
+            <!-- header row -->
+            <table width="100%" cellpadding="0" cellspacing="0">
+              <tr>
+                <td style="padding:36px 44px 24px;">
+                  <table cellpadding="0" cellspacing="0">
+                    <tr>
+                      <!-- icon -->
+                      <td style="vertical-align:top;padding-top:2px;">
+                        <div style="width:42px;height:42px;background:linear-gradient(135deg,${accent.from},${accent.to});border-radius:13px;text-align:center;line-height:42px;font-size:19px;display:inline-block;">🌙</div>
+                      </td>
+                      <td style="padding-left:14px;vertical-align:top;">
+                        <p style="margin:0 0 3px;color:#e2e8f0;font-size:17px;font-weight:700;letter-spacing:-0.2px;">tonight's picks</p>
+                        <p style="margin:0;color:#334155;font-size:12px;letter-spacing:0.2px;">${tagline}</p>
+                      </td>
+                    </tr>
+                  </table>
+                </td>
+              </tr>
+            </table>
+
+            <!-- thin rule -->
+            <table width="100%" cellpadding="0" cellspacing="0">
+              <tr>
+                <td style="padding:0 44px;">
+                  <div style="height:1px;background:#131c2e;"></div>
+                </td>
+              </tr>
+            </table>
+
+            <!-- greeting -->
+            <table width="100%" cellpadding="0" cellspacing="0">
+              <tr>
+                <td style="padding:32px 44px 6px;">
+                  <p style="margin:0;color:#334155;font-size:11px;font-weight:700;letter-spacing:2.5px;text-transform:uppercase;">hey ${userName}</p>
+                </td>
+              </tr>
+            </table>
+
+            <!-- message body -->
+            <table width="100%" cellpadding="0" cellspacing="0">
+              <tr>
+                <td style="padding:12px 44px 28px;">
+                  <p style="margin:0;color:#94a3b8;font-size:16px;line-height:1.9;font-weight:400;">${messageText}</p>
+                </td>
+              </tr>
+            </table>
+
+            <!-- pills -->
+            <table width="100%" cellpadding="0" cellspacing="0">
+              <tr>
+                <td style="padding:0 44px 32px;">
+                  ${pills}
+                </td>
+              </tr>
+            </table>
+
+            <!-- rule -->
+            <table width="100%" cellpadding="0" cellspacing="0">
+              <tr>
+                <td style="padding:0 44px;">
+                  <div style="height:1px;background:#131c2e;"></div>
+                </td>
+              </tr>
+            </table>
+
+            ${zomatoButton}
+
+            <!-- continue CTA -->
+            <table width="100%" cellpadding="0" cellspacing="0">
+              <tr>
+                <td style="padding:32px 44px 40px;">
+                  <a href="${appUrl}/home"
+                     style="display:inline-block;color:${accent.text};text-decoration:none;font-size:13px;font-weight:600;letter-spacing:0.3px;border-bottom:1px solid ${accent.text};padding-bottom:2px;font-family:Helvetica,Arial,sans-serif;">
+                    continue talking →
+                  </a>
+                </td>
+              </tr>
+            </table>
+
+          </td>
+        </tr>
+
+        <!-- footer -->
+        <tr>
+          <td style="padding:24px 4px 0;">
+            <table width="100%" cellpadding="0" cellspacing="0">
+              <tr>
+                <td>
+                  <p style="margin:0;color:#1e293b;font-size:11px;">from your friend at mendi 💛</p>
+                </td>
+                <td align="right">
+                  <a href="${appUrl}/home" style="color:#1e293b;font-size:11px;text-decoration:none;">open app</a>
+                </td>
+              </tr>
+            </table>
+          </td>
+        </tr>
+
+      </table>
+    </td>
+  </tr>
+</table>
+
+</body>
+</html>`;
 };
 
 // ── Main export: trigger recommendations after night reply ────
@@ -301,11 +459,9 @@ export const handleNightRecommendation = async (
   checkin,
 ) => {
   try {
-    // need at least 2 user messages after the night checkin to trigger
     const userMessagesCount = history.filter((m) => m.role === "user").length;
-    if (userMessagesCount < 2) return null; // too early, wait for more context
+    if (userMessagesCount < 2) return null;
 
-    // detect language and current mood from recent messages
     const [language, nightMood] = await Promise.all([
       detectLanguage(history),
       detectNightMood(history),
@@ -315,7 +471,6 @@ export const handleNightRecommendation = async (
       `Night recommendation: mood=${nightMood.mood_label}(${nightMood.mood_score}), language=${language}`,
     );
 
-    // generate the recommendation
     const result = await generateRecommendation(
       user,
       checkin,
@@ -324,7 +479,6 @@ export const handleNightRecommendation = async (
       history,
     );
 
-    // save to conversations
     await supabase.from("conversations").insert({
       user_id: userId,
       checkin_id: checkinId,
@@ -333,16 +487,18 @@ export const handleNightRecommendation = async (
       message_type: "night_recommendation",
     });
 
-    // send email
     const appUrl = process.env.APP_URL || "http://localhost:5173";
     await sendMail({
       email: user.email,
-      subject: `tonight's picks just for you 🌙`,
+      subject: `tonight's picks for you 🌙`,
       html: buildRecommendationEmail(
         user.name,
         result.message,
         result.types,
         appUrl,
+        user.city,
+        result.dish,
+        nightMood.mood_label,
       ),
     });
 

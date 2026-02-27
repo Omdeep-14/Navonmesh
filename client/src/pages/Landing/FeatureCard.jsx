@@ -1,9 +1,27 @@
-const FeatureCard = ({ emoji, title, desc }) => (
-  <div className="bg-slate-800 bg-opacity-60 border border-slate-700 rounded-3xl p-8 hover:border-amber-400 hover:border-opacity-50 transition-all duration-500 hover:-translate-y-1">
-    <div className="text-4xl mb-4">{emoji}</div>
-    <h3 className="text-white font-semibold text-xl mb-3 font-serif">{title}</h3>
-    <p className="text-slate-400 leading-relaxed text-sm">{desc}</p>
-  </div>
+const CTASection = ({ onNavigate }) => (
+  <section className="max-w-3xl mx-auto px-8 pb-32 text-center" style={{ position: "relative", zIndex: 10 }}>
+    <div
+      style={{
+        background: "rgba(10,15,30,0.65)",
+        backdropFilter: "blur(20px)",
+        WebkitBackdropFilter: "blur(20px)",
+        border: "1px solid rgba(255,255,255,0.08)",
+        borderRadius: "1.5rem",
+        padding: "4rem 2rem",
+      }}
+    >
+      <p className="text-5xl mb-6">🌙</p>
+      <h2 className="text-4xl font-bold font-serif text-white mb-4">
+        You deserve someone in your corner
+      </h2>
+      <p className="text-slate-400 mb-8 leading-relaxed max-w-lg mx-auto" style={{ fontWeight: 300 }}>
+        Start each day with a companion that remembers, checks in, and actually cares about how you're doing.
+      </p>
+      <button onClick={() => onNavigate("signup")} className="mendi-btn mendi-btn-amber mendi-btn-lg">
+        <span>Begin for free →</span>
+      </button>
+    </div>
+  </section>
 );
 
-export default FeatureCard;
+export default CTASection;

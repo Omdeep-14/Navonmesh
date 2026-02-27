@@ -1,1 +1,171 @@
 @import "tailwindcss";
+
+/* ── Fonts ─────────────────────────────── */
+body {
+  font-family: 'Inter', sans-serif;
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+}
+.font-serif {
+  font-family: 'DM Serif Display', serif !important;
+}
+
+/* ============================================
+   MENDI BUTTON — bubble fill animation
+   colour matches each variant via CSS vars
+   ============================================ */
+.mendi-btn {
+  all: unset;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  position: relative;
+  padding: 0.55em 1.8em;
+  border: 0.12em solid var(--btn-color, #fbbf24);
+  border-radius: 0.3em;
+  color: var(--btn-color, #fbbf24);
+  font-family: 'Inter', sans-serif;
+  font-size: 0.9rem;
+  font-weight: 600;
+  cursor: pointer;
+  overflow: hidden;
+  transition: border 300ms, color 300ms;
+  user-select: none;
+  white-space: nowrap;
+  letter-spacing: 0.01em;
+}
+.mendi-btn span {
+  position: relative;
+  z-index: 1;
+}
+.mendi-btn:hover {
+  color: #0f172a;
+}
+.mendi-btn:active {
+  border-color: color-mix(in srgb, var(--btn-color, #fbbf24) 60%, black);
+}
+.mendi-btn::before,
+.mendi-btn::after {
+  content: "";
+  position: absolute;
+  width: 9em;
+  aspect-ratio: 1;
+  background: var(--btn-color, #fbbf24);
+  opacity: 0.85;
+  border-radius: 50%;
+  transition: transform 500ms, background 300ms;
+}
+.mendi-btn::before {
+  left: 0;
+  transform: translateX(-8em);
+}
+.mendi-btn::after {
+  right: 0;
+  transform: translateX(8em);
+}
+.mendi-btn:hover::before {
+  transform: translateX(-1em);
+}
+.mendi-btn:hover::after {
+  transform: translateX(1em);
+}
+.mendi-btn:active::before,
+.mendi-btn:active::after {
+  background: color-mix(in srgb, var(--btn-color, #fbbf24) 60%, black);
+}
+
+/* Size variants */
+.mendi-btn-sm {
+  font-size: 0.78rem;
+  padding: 0.45em 1.3em;
+}
+.mendi-btn-lg {
+  font-size: 1.05rem;
+  padding: 0.7em 2.2em;
+}
+.mendi-btn-xl {
+  font-size: 1.15rem;
+  padding: 0.8em 2.8em;
+}
+
+/* Colour variants — just set --btn-color */
+.mendi-btn-amber  { --btn-color: #fbbf24; }
+.mendi-btn-rose   { --btn-color: #fb7185; }
+.mendi-btn-green  { --btn-color: #34d399; }
+.mendi-btn-slate  { --btn-color: #94a3b8; }
+.mendi-btn-red    { --btn-color: #f87171; }
+
+/* Full-width form button */
+.mendi-btn-block {
+  width: 100%;
+  display: flex;
+}
+
+/* ============================================
+   GLASSMORPHIC CARD
+   ============================================ */
+.glass-card {
+  background: rgba(10, 15, 30, 0.52);
+  backdrop-filter: blur(24px);
+  -webkit-backdrop-filter: blur(24px);
+  border: 1px solid rgba(255, 255, 255, 0.09);
+  border-radius: 1.5rem;
+  box-shadow: 0 8px 32px rgba(0, 0, 0, 0.5), inset 0 1px 0 rgba(255,255,255,0.06);
+}
+
+/* Glass input */
+.glass-input {
+  width: 100%;
+  background: rgba(255, 255, 255, 0.05);
+  border: 1px solid rgba(255, 255, 255, 0.09);
+  border-radius: 0.75rem;
+  padding: 0.75rem 1rem;
+  color: #ffffff;
+  font-family: 'Inter', sans-serif;
+  font-size: 0.875rem;
+  outline: none;
+  transition: all 0.2s ease;
+}
+.glass-input::placeholder { color: rgba(148, 163, 184, 0.45); }
+.glass-input:focus {
+  border-color: rgba(251, 191, 36, 0.5);
+  background: rgba(255, 255, 255, 0.08);
+  box-shadow: 0 0 0 3px rgba(251, 191, 36, 0.08);
+}
+
+/* Tab switcher */
+.glass-tab {
+  flex: 1;
+  padding: 0.65rem 1rem;
+  border-radius: 0.55rem;
+  font-family: 'Inter', sans-serif;
+  font-weight: 600;
+  font-size: 0.875rem;
+  border: none;
+  cursor: pointer;
+  transition: all 0.25s ease;
+}
+.glass-tab-active {
+  background: linear-gradient(to right, #fbbf24, #fb7185);
+  color: #0f172a;
+  box-shadow: 0 4px 15px rgba(251, 191, 36, 0.25);
+}
+.glass-tab-inactive {
+  background: transparent;
+  color: #64748b;
+}
+.glass-tab-inactive:hover { color: #e2e8f0; }
+
+/* Progress bar */
+.mendi-progress-bar {
+  height: 3px;
+  border-radius: 9999px;
+  background: rgba(255,255,255,0.08);
+  overflow: hidden;
+}
+.mendi-progress-fill {
+  height: 100%;
+  border-radius: 9999px;
+  background: linear-gradient(to right, #fbbf24, #fb7185);
+  transition: width 0.4s ease;
+}

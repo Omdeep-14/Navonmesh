@@ -30,23 +30,65 @@ const getConversationHistory = async (userId, checkinId) => {
   return data || [];
 };
 
-// ── Tone guide based on age ───────────────────────────────────
-const getToneForAge = (age) => {
-  if (!age) return "casual and warm";
-  if (age <= 15)
-    return "very casual, like a supportive older sibling. use simple words, maybe a light emoji or two";
-  if (age <= 22)
-    return "super casual, like a close college friend. can use slang lightly, keep it real and relatable";
-  if (age <= 35)
-    return "warm and casual, like a good friend who gets it. no fluff, just genuine";
-  if (age <= 55)
-    return "warm and grounded, like a thoughtful friend. calm and steady tone";
-  return "gentle and warm, like a caring old friend. simple and comforting";
+// ── Tone guide based on age AND mood ─────────────────────────
+const getVibeForAgeMood = (age, moodLabel, moodScore) => {
+  // age bucket
+  const ageBucket = !age
+    ? "adult"
+    : age <= 15
+      ? "teen"
+      : age <= 22
+        ? "young"
+        : age <= 35
+          ? "adult"
+          : age <= 55
+            ? "midlife"
+            : "senior";
+
+  // mood energy
+  const isLow = moodScore <= 4;
+  const isOkay = moodScore >= 5 && moodScore <= 7;
+  const isGood = moodScore >= 8;
+
+  const vibes = {
+    teen: {
+      low: "talk like a caring older sibling who gets it — casual, simple, gentle. no big words. maybe one emoji if it fits. don't be preachy",
+      okay: "casual and light, like a cool older sibling checking in. keep it easy and real",
+      good: "fun and hyped, like a sibling who's happy for them. short and energetic",
+    },
+    young: {
+      low: "like a close college friend who genuinely cares — no fluff, no therapy speak. real and raw. can use light slang. don't try to fix anything",
+      okay: "chill and real, like a friend catching up over text. conversational and easy",
+      good: "hyped and fun, like a friend who's excited with them. can be playful",
+    },
+    adult: {
+      low: "like a good friend who's been through stuff too — grounded, warm, no nonsense. skip the positivity fluff. just be real with them",
+      okay: "warm and casual, like checking in with a close friend after a long day",
+      good: "genuine and warm, happy to hear they're doing well. easy going",
+    },
+    midlife: {
+      low: "steady and warm, like a trusted friend who doesn't overreact. calm, grounded, no dramatic sympathy",
+      okay: "warm and easy, like a friend who just wants to hear how things went",
+      good: "warm and light, genuinely happy for them without being over the top",
+    },
+    senior: {
+      low: "gentle and kind, like a longtime friend who cares deeply. simple words, no slang, very warm",
+      okay: "warm and simple, like catching up with an old friend",
+      good: "warm and cheerful, simple and genuine",
+    },
+  };
+
+  const mood = isLow ? "low" : isOkay ? "okay" : "good";
+  return vibes[ageBucket]?.[mood] || "warm and casual, like a good friend";
 };
 
 // ── Generate proactive AI message ────────────────────────────
 const generateProactiveMessage = async (type, user, checkin, history) => {
-  const tone = getToneForAge(user.age);
+  const vibe = getVibeForAgeMood(
+    user.age,
+    checkin.mood_label,
+    checkin.mood_score,
+  );
   const location = [user.area, user.city].filter(Boolean).join(", ");
 
   // pull the first user message (their morning checkin) for context
@@ -57,47 +99,49 @@ const generateProactiveMessage = async (type, user, checkin, history) => {
 
   const baseRules = `
 You are texting ${user.name} like a real friend — NOT a therapist, NOT an AI assistant.
-Tone: ${tone}.
-${location ? `They live in ${location} — only mention this if it genuinely flows naturally into the conversation, like 90% of messages should not mention location at all.` : ""}
+Vibe for this message: ${vibe}
+${location ? `They live in ${location} — only mention this if it genuinely flows naturally, most messages should not reference location at all.` : ""}
 ${user.age ? `They are ${user.age} years old.` : ""}
+Their mood today: ${checkin.mood_label} (${checkin.mood_score}/10) — let this shape how you talk, not what you say.
 
 STRICT RULES — if you break any of these the message fails:
-- Never say "I'm here for you", "you're not alone", "I'm so sorry to hear that", "sending love", "safe space", "it's okay to feel"
+- Never say "I'm here for you", "you're not alone", "I'm so sorry to hear that", "sending love", "safe space", "it's okay to feel", "you got this"
 - Never use phrases like "it sounds like", "I can imagine", "I understand how you feel"
 - Never start with "Hey ${user.name}" — just get straight to what you want to say
 - No bullet points, no lists, no paragraphs
 - Max 2 sentences — short like a real text message
 - Sound like a human who actually knows them, not a wellness app
-- Reference something specific from the conversation if possible`;
+- The mood should shape your TONE and ENERGY, not your words — don't say "I know you're feeling anxious"`;
 
   const prompts = {
     event_followup: `${baseRules}
 
 Context: This morning ${user.name} mentioned something they were stressed or nervous about.
 Morning message: "${morningMessage}"
-You want to casually ask how it went — like a friend who remembered and is genuinely curious.
+You want to casually ask how it went — like a friend who remembered.
 The message MUST end with a question — open ended, something they'd actually want to answer.
+If their mood was low → ask gently and warmly. If mood was okay/good → ask more casually and lightly.
 NEVER end with a statement or motivation. Always a question.
-Example vibe: "yo how did that thing with your manager go??" or "wait how did the presentation go, tell me everything"
 Write the message:`,
 
     evening_checkin: `${baseRules}
 
-Context: ${user.name} started the day feeling ${checkin.mood_label}.
+Context: ${user.name} started the day feeling ${checkin.mood_label} (${checkin.mood_score}/10).
 Morning message: "${morningMessage}"
 It's evening. Ask them something real — make them want to open the app and reply.
-The message MUST end with a question — something open ended that invites them to talk.
+The message MUST end with a question.
+If mood was low → softer, more gentle check-in energy. If mood was okay/good → lighter, more casual.
 NEVER send motivation or advice. A friend asks, they don't lecture.
-Example vibe: "okay but how are you actually doing rn?" or "how did today end up going?"
 Write the message:`,
 
     night_checkin: `${baseRules}
 
-Context: ${user.name} started the day feeling ${checkin.mood_label}.
+Context: ${user.name} started the day feeling ${checkin.mood_label} (${checkin.mood_score}/10).
 Morning message: "${morningMessage}"
-It's night. Check in gently — but still end with a question so they feel like replying.
-The message MUST end with a question. No motivational endings, no "you got this", no advice.
-Example vibe: "how was today in the end?" or "did things get any better after this morning?"
+It's night. Check in before they sleep.
+The message MUST end with a question.
+If mood was low → extra gentle and warm, low pressure. If mood was okay/good → easy and light.
+No motivational endings, no "you got this", no advice.
 Write the message:`,
   };
 

@@ -1,4 +1,5 @@
 import supabase from "../config/supabaseConfig.js";
+import { handleNightRecommendation } from "../controller/recommender.js";
 import { ChatGroq } from "@langchain/groq";
 import {
   HumanMessage,
@@ -16,7 +17,7 @@ const llm = new ChatGroq({
 const getConversationHistory = async (userId, checkinId) => {
   const { data } = await supabase
     .from("conversations")
-    .select("role, message")
+    .select("role, message, message_type")
     .eq("user_id", userId)
     .eq("checkin_id", checkinId)
     .order("created_at", { ascending: true });
@@ -78,24 +79,75 @@ const detectMood = async (message) => {
   }
 };
 
+// ── Check if night recommendation should trigger ──────────────
+const shouldTriggerRecommendation = (history) => {
+  const hasNightCheckin = history.some(
+    (m) => m.message_type === "night_checkin",
+  );
+  if (!hasNightCheckin) return false;
+
+  const alreadySent = history.some(
+    (m) => m.message_type === "night_recommendation",
+  );
+  if (alreadySent) return false;
+
+  const nightCheckinIndex = history.findLastIndex(
+    (m) => m.message_type === "night_checkin",
+  );
+  const messagesAfterNight = history
+    .slice(nightCheckinIndex + 1)
+    .filter((m) => m.role === "user");
+
+  return messagesAfterNight.length >= 2;
+};
+
+// ── Safe schedule insert with full logging ────────────────────
+const insertScheduledMessage = async (payload) => {
+  console.log("Inserting scheduled_message:", JSON.stringify(payload));
+  const { data, error } = await supabase
+    .from("scheduled_messages")
+    .insert(payload)
+    .select();
+  if (error) {
+    console.error("scheduled_messages insert FAILED:", JSON.stringify(error));
+  } else {
+    console.log(
+      "✓ scheduled_messages inserted:",
+      data?.map((r) => r.id),
+    );
+  }
+  return { data, error };
+};
+
 // ── Main controller ───────────────────────────────────────────
 export const morningCheckin = async (req, res) => {
   try {
+    console.log("=== morningCheckin called ===");
+
     const { message } = req.body;
     const userId = req.user.id;
     const today = new Date().toISOString().split("T")[0];
-
-    // read isFast at the top so it's available everywhere
     const isFast = req.query.fast === "true";
+
+    console.log("userId:", userId);
+    console.log("isFast:", isFast);
+    console.log("today:", today);
 
     if (!message) return res.status(400).json({ error: "Message is required" });
 
     // get user info
-    const { data: user } = await supabase
+    const { data: user, error: userError } = await supabase
       .from("users")
-      .select("name, city, area")
+      .select("name, email, age, city, area")
       .eq("id", userId)
       .single();
+
+    if (userError || !user) {
+      console.error("User fetch error:", userError);
+      return res.status(500).json({ error: "Could not fetch user" });
+    }
+
+    console.log("User fetched:", user.name);
 
     // check if already checked in today
     const { data: existingCheckin } = await supabase
@@ -104,6 +156,11 @@ export const morningCheckin = async (req, res) => {
       .eq("user_id", userId)
       .eq("checkin_date", today)
       .single();
+
+    console.log(
+      "existingCheckin:",
+      existingCheckin?.id || "none — first checkin of the day",
+    );
 
     // ── Already checked in — continue conversation with memory ──
     if (existingCheckin) {
@@ -118,7 +175,9 @@ export const morningCheckin = async (req, res) => {
         - Never mention check-ins, sessions, or anything technical
         - Reference what they said earlier if it is relevant — show you were listening
         - If they seem to be getting more distressed, be extra gentle
-        - Keep it short (2-3 sentences max)`;
+        - Keep it short (2-3 sentences max)
+        - Never say "I'm here for you", "you're not alone", "safe space"
+        - Sound like a real friend, not a wellness app`;
 
       const aiResponse = await llm.invoke(
         buildMessages(systemPrompt, history, message),
@@ -141,6 +200,22 @@ export const morningCheckin = async (req, res) => {
         },
       ]);
 
+      // ── Check if night recommendation should fire ──
+      const updatedHistory = await getConversationHistory(
+        userId,
+        existingCheckin.id,
+      );
+      if (shouldTriggerRecommendation(updatedHistory)) {
+        console.log("Triggering night recommendation...");
+        handleNightRecommendation(
+          userId,
+          existingCheckin.id,
+          updatedHistory,
+          user,
+          existingCheckin,
+        ).catch((err) => console.error("Recommendation error:", err.message));
+      }
+
       return res.json({
         reply: aiResponse.content,
         checkin_id: existingCheckin.id,
@@ -153,10 +228,15 @@ export const morningCheckin = async (req, res) => {
     }
 
     // ── First checkin of the day ──
+    console.log("Running mood detection and event extraction...");
+
     const [mood, events] = await Promise.all([
       detectMood(message),
       extractEvents(message),
     ]);
+
+    console.log("Mood detected:", mood);
+    console.log("Events detected:", events.length);
 
     const { data: checkin, error: checkinError } = await supabase
       .from("daily_checkins")
@@ -170,20 +250,23 @@ export const morningCheckin = async (req, res) => {
       .select()
       .single();
 
-    if (checkinError)
+    if (checkinError) {
+      console.error("Checkin insert error:", JSON.stringify(checkinError));
       return res.status(500).json({ error: checkinError.message });
+    }
+
+    console.log("✓ Checkin created:", checkin.id);
 
     // save events and schedule follow-ups
     if (events.length > 0) {
       for (const event of events) {
         const eventTime = new Date(event.time);
 
-        // isFast compresses event follow-up to 30 seconds
         const followUpAt = isFast
           ? new Date(Date.now() + 30 * 1000)
           : new Date(eventTime.getTime() + 2 * 60 * 60 * 1000);
 
-        const { data: savedEvent } = await supabase
+        const { data: savedEvent, error: eventError } = await supabase
           .from("user_events")
           .insert({
             user_id: userId,
@@ -195,7 +278,17 @@ export const morningCheckin = async (req, res) => {
           .select()
           .single();
 
-        await supabase.from("scheduled_messages").insert({
+        if (eventError) {
+          console.error(
+            "user_events insert error:",
+            JSON.stringify(eventError),
+          );
+          continue;
+        }
+
+        console.log("✓ Event saved:", savedEvent.id);
+
+        await insertScheduledMessage({
           user_id: userId,
           event_id: savedEvent.id,
           scheduled_for: followUpAt.toISOString(),
@@ -204,7 +297,7 @@ export const morningCheckin = async (req, res) => {
       }
     }
 
-    // schedule evening and night check-ins
+    // calculate evening and night times
     const eveningTime = new Date();
     eveningTime.setTime(
       isFast
@@ -227,21 +320,25 @@ export const morningCheckin = async (req, res) => {
           })().getTime(),
     );
 
-    await supabase.from("scheduled_messages").insert([
-      {
-        user_id: userId,
-        scheduled_for: eveningTime.toISOString(),
-        message_type: "evening_checkin",
-      },
-      {
-        user_id: userId,
-        scheduled_for: nightTime.toISOString(),
-        message_type: "night_checkin",
-      },
-    ]);
+    console.log("Evening scheduled for:", eveningTime.toISOString());
+    console.log("Night scheduled for:", nightTime.toISOString());
 
-    // save user message first so it's included in history
-    await supabase.from("conversations").insert({
+    // insert evening checkin
+    await insertScheduledMessage({
+      user_id: userId,
+      scheduled_for: eveningTime.toISOString(),
+      message_type: "evening_checkin",
+    });
+
+    // insert night checkin
+    await insertScheduledMessage({
+      user_id: userId,
+      scheduled_for: nightTime.toISOString(),
+      message_type: "night_checkin",
+    });
+
+    // save user message
+    const { error: convError } = await supabase.from("conversations").insert({
       user_id: userId,
       checkin_id: checkin.id,
       role: "user",
@@ -249,7 +346,9 @@ export const morningCheckin = async (req, res) => {
       message_type: "morning",
     });
 
-    // fetch history (just this first message)
+    if (convError)
+      console.error("Conversation insert error:", JSON.stringify(convError));
+
     const history = await getConversationHistory(userId, checkin.id);
 
     const systemPrompt = `You are a warm, empathetic mental health companion — like a close friend, not a therapist.
@@ -262,13 +361,14 @@ export const morningCheckin = async (req, res) => {
       - If they have events, gently reassure them
       - Keep it short (3-4 sentences max)
       - Don't use bullet points or lists
-      - End with something encouraging for their day`;
+      - End with something encouraging for their day
+      - Never say "I'm here for you", "you're not alone", "safe space"
+      - Sound like a real friend, not a wellness app`;
 
     const aiResponse = await llm.invoke(
       buildMessages(systemPrompt, history, message),
     );
 
-    // save AI response
     await supabase.from("conversations").insert({
       user_id: userId,
       checkin_id: checkin.id,
@@ -277,6 +377,8 @@ export const morningCheckin = async (req, res) => {
       message_type: "morning",
     });
 
+    console.log("=== morningCheckin complete ===");
+
     res.json({
       reply: aiResponse.content,
       checkin_id: checkin.id,
@@ -284,7 +386,7 @@ export const morningCheckin = async (req, res) => {
       events_detected: events.length,
     });
   } catch (err) {
-    console.error(err);
+    console.error("morningCheckin CRASH:", err);
     res.status(500).json({ error: err.message });
   }
 };

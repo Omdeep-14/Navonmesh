@@ -1,6 +1,68 @@
 import { useState, useEffect, useRef } from "react";
 import CBTModal from "../../components/shared/CbtModel";
 
+// ── Speech Recognition hook ───────────────────────────────────
+const useSpeechRecognition = () => {
+  const [isListening, setIsListening] = useState(false);
+  const [transcript, setTranscript] = useState("");
+  const recognitionRef = useRef(null);
+
+  const supported =
+    typeof window !== "undefined" &&
+    ("SpeechRecognition" in window || "webkitSpeechRecognition" in window);
+
+  const startListening = (onFinalResult) => {
+    if (!supported) return;
+    const SR = window.SpeechRecognition || window.webkitSpeechRecognition;
+    const rec = new SR();
+    rec.continuous = false;
+    rec.interimResults = true;
+    rec.lang = "en-US";
+    recognitionRef.current = rec;
+    rec.onstart = () => setIsListening(true);
+    rec.onresult = (e) => {
+      const t = Array.from(e.results)
+        .map((r) => r[0].transcript)
+        .join("");
+      setTranscript(t);
+      if (e.results[e.results.length - 1].isFinal) {
+        onFinalResult(t);
+        setTranscript("");
+      }
+    };
+    rec.onerror = () => setIsListening(false);
+    rec.onend = () => setIsListening(false);
+    rec.start();
+  };
+
+  const stopListening = () => {
+    recognitionRef.current?.stop();
+    setIsListening(false);
+  };
+
+  return { isListening, transcript, startListening, stopListening, supported };
+};
+
+// ── TTS helper ────────────────────────────────────────────────
+const speakText = (text) => {
+  if (!("speechSynthesis" in window) || !text?.trim()) return;
+  window.speechSynthesis.cancel();
+  const utt = new SpeechSynthesisUtterance(text);
+  utt.rate = 0.95;
+  utt.pitch = 1.05;
+  utt.volume = 1;
+  const voices = window.speechSynthesis.getVoices();
+  const preferred = voices.find(
+    (v) =>
+      v.name.includes("Samantha") ||
+      v.name.includes("Google UK English Female") ||
+      v.name.includes("Karen") ||
+      v.lang === "en-GB",
+  );
+  if (preferred) utt.voice = preferred;
+  window.speechSynthesis.speak(utt);
+};
+
 // ── Mood system ───────────────────────────────────────────────
 const MOOD_SCORE = {
   happy: 90,
@@ -93,6 +155,7 @@ const getMoodScore = (mood) => MOOD_SCORE[mood] ?? 50;
 
 const formatTime = (ts) =>
   new Date(ts).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" });
+
 const friendlyDay = (dateStr) => {
   const today = new Date().toDateString();
   const yesterday = new Date(Date.now() - 86_400_000).toDateString();
@@ -105,6 +168,7 @@ const friendlyDay = (dateStr) => {
     day: "numeric",
   });
 };
+
 const getGreeting = () => {
   const h = new Date().getHours();
   if (h >= 5 && h < 12) return "Good morning";
@@ -112,6 +176,7 @@ const getGreeting = () => {
   if (h >= 17 && h < 21) return "Good evening";
   return "Good night";
 };
+
 const groupByDay = (items) => {
   const groups = {};
   items.forEach((m) => {
@@ -121,6 +186,7 @@ const groupByDay = (items) => {
   });
   return groups;
 };
+
 const dominantMood = (items) => {
   if (!items?.length) return "neutral";
   const counts = items.reduce((a, e) => {
@@ -334,7 +400,6 @@ const MoodLineGraph = ({ history }) => {
       ctx.textAlign = "center";
       ctx.fillText(friendlyDay(p.day).split(",")[0], x, H - 5);
     });
-
     [
       ["😊", 90],
       ["—", 50],
@@ -365,7 +430,6 @@ const Sidebar = ({
   const dayKeys = Object.keys(dayGroups).sort(
     (a, b) => new Date(b) - new Date(a),
   );
-
   return (
     <aside
       className="w-64 flex-shrink-0 flex flex-col h-full"
@@ -462,9 +526,9 @@ const Sidebar = ({
         ) : (
           <div className="space-y-1">
             {dayKeys.map((day) => {
-              const msgs = dayGroups[day];
-              const userMsgs = msgs.filter((m) => m.role === "user");
-              const mood = dominantMood(userMsgs);
+              const msgs = dayGroups[day],
+                userMsgs = msgs.filter((m) => m.role === "user"),
+                mood = dominantMood(userMsgs);
               return (
                 <button
                   key={day}
@@ -503,9 +567,36 @@ const Sidebar = ({
   );
 };
 
-// ── Input Bar ─────────────────────────────────────────────────
-const InputBar = ({ onSend, isTyping }) => {
+// ── Input Bar — with mic + speaker baked in ───────────────────
+const InputBar = ({ onSend, isTyping, lastAiText, speakTrigger }) => {
   const [text, setText] = useState("");
+  const [isSpeakerOn, setIsSpeakerOn] = useState(true);
+  const { isListening, transcript, startListening, stopListening, supported } =
+    useSpeechRecognition();
+
+  // Speak AI reply whenever speakTrigger increments
+  useEffect(() => {
+    if (speakTrigger && isSpeakerOn && lastAiText) speakText(lastAiText);
+  }, [speakTrigger]);
+
+  const handleSpeaker = () => {
+    setIsSpeakerOn((prev) => {
+      if (prev) window.speechSynthesis?.cancel();
+      return !prev;
+    });
+  };
+
+  // Voice input: auto-sends on final transcript
+  const handleMic = () => {
+    if (isListening) {
+      stopListening();
+      return;
+    }
+    startListening((finalText) => {
+      if (finalText.trim()) onSend(finalText.trim());
+    });
+  };
+
   const handleSend = () => {
     if (!text.trim()) return;
     onSend(text.trim());
@@ -520,20 +611,84 @@ const InputBar = ({ onSend, isTyping }) => {
 
   return (
     <div
-      className="p-4 flex-shrink-0"
+      className="flex-shrink-0"
       style={{
         borderTop: "1px solid rgba(255,255,255,0.06)",
         background: "rgba(8,12,25,0.7)",
         backdropFilter: "blur(12px)",
       }}
     >
-      <div className="flex items-end gap-3">
+      {/* Live transcript preview */}
+      {isListening && transcript && (
+        <div
+          className="mx-4 mt-3 px-4 py-2 rounded-xl text-sm"
+          style={{
+            background: "rgba(251,191,36,0.08)",
+            border: "1px solid rgba(251,191,36,0.2)",
+            color: "#fbbf24",
+          }}
+        >
+          🎤 {transcript}
+        </div>
+      )}
+
+      <div className="p-4 flex items-end gap-3">
+        {/* Mic button */}
+        {supported ? (
+          <button
+            onClick={handleMic}
+            title={isListening ? "Stop" : "Speak your message"}
+            className="flex-shrink-0 flex items-center justify-center"
+            style={{
+              width: "44px",
+              height: "44px",
+              borderRadius: "14px",
+              border: isListening
+                ? "1.5px solid #f43f5e"
+                : "1.5px solid rgba(255,255,255,0.1)",
+              background: isListening
+                ? "rgba(244,63,94,0.15)"
+                : "rgba(255,255,255,0.04)",
+              color: isListening ? "#f43f5e" : "#64748b",
+              fontSize: "18px",
+              cursor: "pointer",
+              transition: "all 0.2s",
+              animation: isListening
+                ? "mic-pulse 1.2s ease-in-out infinite"
+                : "none",
+            }}
+          >
+            {isListening ? "⏹" : "🎤"}
+          </button>
+        ) : (
+          <button
+            disabled
+            title="Not supported in this browser"
+            className="flex-shrink-0 flex items-center justify-center"
+            style={{
+              width: "44px",
+              height: "44px",
+              borderRadius: "14px",
+              border: "1.5px solid rgba(255,255,255,0.05)",
+              background: "rgba(255,255,255,0.02)",
+              color: "#334155",
+              fontSize: "18px",
+              cursor: "not-allowed",
+            }}
+          >
+            🎤
+          </button>
+        )}
+
+        {/* Textarea */}
         <div className="flex-1">
           <textarea
             value={text}
             onChange={(e) => setText(e.target.value)}
             onKeyDown={handleKey}
-            placeholder="Share how you're feeling..."
+            placeholder={
+              isListening ? "Listening… speak now" : "Share how you're feeling…"
+            }
             rows={1}
             className="glass-input"
             style={{ resize: "none", minHeight: "44px", maxHeight: "120px" }}
@@ -544,6 +699,32 @@ const InputBar = ({ onSend, isTyping }) => {
             }}
           />
         </div>
+
+        {/* Speaker toggle */}
+        <button
+          onClick={handleSpeaker}
+          title={isSpeakerOn ? "Mute Mendi's voice" : "Enable Mendi's voice"}
+          className="flex-shrink-0 flex items-center justify-center"
+          style={{
+            width: "44px",
+            height: "44px",
+            borderRadius: "14px",
+            border: isSpeakerOn
+              ? "1.5px solid #93c5fd"
+              : "1.5px solid rgba(255,255,255,0.1)",
+            background: isSpeakerOn
+              ? "rgba(147,197,253,0.12)"
+              : "rgba(255,255,255,0.04)",
+            color: isSpeakerOn ? "#93c5fd" : "#64748b",
+            fontSize: "18px",
+            cursor: "pointer",
+            transition: "all 0.2s",
+          }}
+        >
+          {isSpeakerOn ? "🔊" : "🔇"}
+        </button>
+
+        {/* Send button */}
         <button
           onClick={handleSend}
           disabled={!text.trim() || isTyping}
@@ -568,6 +749,13 @@ const InputBar = ({ onSend, isTyping }) => {
           →
         </button>
       </div>
+
+      <style>{`
+        @keyframes mic-pulse {
+          0%, 100% { box-shadow: 0 0 0 0 rgba(244,63,94,0.5); }
+          50%       { box-shadow: 0 0 0 8px rgba(244,63,94,0); }
+        }
+      `}</style>
     </div>
   );
 };
@@ -591,7 +779,7 @@ const MoodHistoryView = ({ history }) => {
       <div className="flex-1 overflow-y-auto p-6">
         <button
           onClick={() => setSelectedDay(null)}
-          className="flex items-center gap-2 text-sm mb-6 transition-colors"
+          className="flex items-center gap-2 text-sm mb-6"
           style={{ color: "#64748b" }}
           onMouseEnter={(e) => (e.currentTarget.style.color = "#e2e8f0")}
           onMouseLeave={(e) => (e.currentTarget.style.color = "#64748b")}
@@ -619,8 +807,8 @@ const MoodHistoryView = ({ history }) => {
             {Object.entries(dayMoodCounts)
               .sort((a, b) => b[1] - a[1])
               .map(([mood, count]) => {
-                const c = getMoodColor(mood);
-                const pct = Math.round((count / dayTotal) * 100);
+                const c = getMoodColor(mood),
+                  pct = Math.round((count / dayTotal) * 100);
                 return (
                   <div key={mood}>
                     <div className="flex items-center justify-between mb-1">
@@ -736,9 +924,9 @@ const MoodHistoryView = ({ history }) => {
       ) : (
         <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
           {dayKeys.map((day) => {
-            const entries = dayGroups[day];
-            const topMood = dominantMood(entries);
-            const c = getMoodColor(topMood);
+            const entries = dayGroups[day],
+              topMood = dominantMood(entries),
+              c = getMoodColor(topMood);
             return (
               <button
                 key={day}
@@ -809,79 +997,80 @@ export default function Home({ onNavigate }) {
   const [checkinDate, setCheckinDate] = useState(
     new Date().toISOString().split("T")[0],
   );
+
+  // ── Audio state (passed down to InputBar) ─────────────────
+  const [lastAiText, setLastAiText] = useState("");
+  const [speakTrigger, setSpeakTrigger] = useState(0);
+
   const bottomRef = useRef(null);
   const deepLinkHandled = useRef(false);
-  // ── PATCH: cursor for poll so we never miss or double-fetch messages ──
   const lastSeenRef = useRef(null);
 
-  // ── Single mount effect: auth check + deep link handler ──
+  // ── Helper: push a new AI text to TTS ────────────────────
+  const triggerSpeak = (text) => {
+    setLastAiText(text);
+    setSpeakTrigger((n) => n + 1);
+  };
+
+  // ── Auth + deep link ──────────────────────────────────────
   useEffect(() => {
     const token = localStorage.getItem("token");
     if (!token) {
-      const currentParams = window.location.search;
-      if (currentParams)
-        sessionStorage.setItem("pendingDeepLink", currentParams);
+      const p = window.location.search;
+      if (p) sessionStorage.setItem("pendingDeepLink", p);
       onNavigate("landing");
       return;
     }
-
     if (deepLinkHandled.current) return;
 
     const rawParams =
       window.location.search || sessionStorage.getItem("pendingDeepLink") || "";
     sessionStorage.removeItem("pendingDeepLink");
-
     const params = new URLSearchParams(rawParams);
     const replyCheckinId = params.get("reply");
     const replyType = params.get("type");
-
     if (!replyCheckinId || !replyType) return;
 
     deepLinkHandled.current = true;
     window.history.replaceState({}, "", "/home");
 
-    const fetchReplyContext = async () => {
+    (async () => {
       try {
         const res = await fetch(
           `${import.meta.env.VITE_API_URL}/api/v1/chat/context?checkin_id=${replyCheckinId}&type=${replyType}`,
           { headers: { Authorization: `Bearer ${token}` } },
         );
-        console.log("context status:", res.status);
         const data = await res.json();
-        console.log("context data:", data);
-
+        const content =
+          data.message ||
+          `${getGreeting()}, ${user?.name?.split(" ")[0] || "there"} 🌙 How are you feeling right now?`;
         const contextMsg = {
           id: Date.now(),
           role: "assistant",
-          content:
-            data.message ||
-            `${getGreeting()}, ${user?.name?.split(" ")[0] || "there"} 🌙 How are you feeling right now?`,
           timestamp: Date.now(),
+          content,
         };
-
-        // Seed lastSeenRef so poll starts from now, not 30s ago
         lastSeenRef.current = new Date().toISOString();
-
         setChatOpen(true);
         setActiveView("chat");
         setMessages([contextMsg]);
         setAllMessages((prev) => [...prev, contextMsg]);
-      } catch (err) {
-        console.error("fetchReplyContext failed:", err);
+        triggerSpeak(content);
+      } catch {
+        const content = `${getGreeting()}, ${user?.name?.split(" ")[0] || "there"} 🌙 How are you feeling right now?`;
         const welcome = {
           id: Date.now(),
           role: "assistant",
           timestamp: Date.now(),
-          content: `${getGreeting()}, ${user?.name?.split(" ")[0] || "there"} 🌙 How are you feeling right now?`,
+          content,
         };
         lastSeenRef.current = new Date().toISOString();
         setChatOpen(true);
         setMessages([welcome]);
         setAllMessages((prev) => [...prev, welcome]);
+        triggerSpeak(content);
       }
-    };
-
-    fetchReplyContext();
+    })();
   }, []);
 
   useEffect(() => {
@@ -893,24 +1082,18 @@ export default function Home({ onNavigate }) {
     bottomRef.current?.scrollIntoView({ behavior: "smooth" });
   }, [messages, isTyping]);
 
-  // ── Poll for new assistant messages ──────────────────────────
+  // ── Poll ──────────────────────────────────────────────────
   const pollRef = useRef(null);
   pollRef.current = async () => {
     const token = localStorage.getItem("token");
-    const today = checkinDate;
     try {
-      // ── PATCH: use last_seen cursor instead of fixed 30s window ──
-      const params = new URLSearchParams({ date: today });
-      if (lastSeenRef.current) {
-        params.append("last_seen", lastSeenRef.current);
-      }
-
+      const params = new URLSearchParams({ date: checkinDate });
+      if (lastSeenRef.current) params.append("last_seen", lastSeenRef.current);
       const res = await fetch(
         `${import.meta.env.VITE_API_URL}/api/v1/chat/poll?${params}`,
         { headers: { Authorization: `Bearer ${token}` } },
       );
       const data = await res.json();
-
       if (data.newMessages?.length) {
         const newMsgs = data.newMessages
           .filter((m) => m.message?.trim())
@@ -921,17 +1104,16 @@ export default function Home({ onNavigate }) {
             timestamp: new Date(m.created_at).getTime(),
             message_type: m.message_type,
           }));
-
         if (newMsgs.length) {
-          // Advance cursor to just after the latest message received
           lastSeenRef.current = new Date(
             newMsgs[newMsgs.length - 1].timestamp + 1,
           ).toISOString();
-
           setMessages((prev) => {
             const ids = new Set(prev.map((m) => m.id));
             return [...prev, ...newMsgs.filter((m) => !ids.has(m.id))];
           });
+          // Speak the latest proactive message
+          triggerSpeak(newMsgs[newMsgs.length - 1].content);
         }
       }
     } catch (e) {
@@ -945,18 +1127,20 @@ export default function Home({ onNavigate }) {
     return () => clearInterval(id);
   }, [chatOpen]);
 
+  // ── Open chat ─────────────────────────────────────────────
   const openChat = () => {
-    // Seed cursor so first poll doesn't fetch old messages
     lastSeenRef.current = new Date().toISOString();
+    const content = `${greeting}, ${user?.name?.split(" ")[0] || "there"} 🌙 How are you feeling right now?`;
     const welcome = {
       id: Date.now(),
       role: "assistant",
       timestamp: Date.now(),
-      content: `${greeting}, ${user?.name?.split(" ")[0] || "there"} 🌙 How are you feeling right now?`,
+      content,
     };
     setChatOpen(true);
     setMessages([welcome]);
     setAllMessages((prev) => [...prev, welcome]);
+    triggerSpeak(content);
   };
 
   const openDayChat = (_day, msgs) => {
@@ -964,6 +1148,7 @@ export default function Home({ onNavigate }) {
     setMessages(msgs);
   };
 
+  // ── Send ──────────────────────────────────────────────────
   const handleSend = async (text) => {
     const token = localStorage.getItem("token");
     const userMsg = {
@@ -989,6 +1174,7 @@ export default function Home({ onNavigate }) {
         },
       );
       const data = await res.json();
+
       if (!res.ok) {
         const err = {
           id: Date.now() + 1,
@@ -1000,10 +1186,9 @@ export default function Home({ onNavigate }) {
         setAllMessages((prev) => [...prev, err]);
         return;
       }
-      const mood = data.mood?.mood_label || "neutral";
 
+      const mood = data.mood?.mood_label || "neutral";
       if (data.checkin_date) setCheckinDate(data.checkin_date);
-      // ── PATCH: advance cursor after each send so poll doesn't double-fetch ──
       lastSeenRef.current = new Date().toISOString();
 
       const moodUpdater = (prev) =>
@@ -1026,6 +1211,7 @@ export default function Home({ onNavigate }) {
         };
         setMessages((prev) => [...prev, aiMsg]);
         setAllMessages((prev) => [...prev, aiMsg]);
+        triggerSpeak(data.reply);
       }
     } catch {
       const err = {
@@ -1080,7 +1266,6 @@ export default function Home({ onNavigate }) {
         />
 
         <main className="flex-1 flex flex-col h-full overflow-hidden">
-          {/* Header */}
           <header
             className="flex items-center justify-between px-6 py-4 flex-shrink-0"
             style={{
@@ -1146,7 +1331,6 @@ export default function Home({ onNavigate }) {
             </div>
           </header>
 
-          {/* Content */}
           {activeView === "history" ? (
             <MoodHistoryView history={history} />
           ) : !chatOpen ? (
@@ -1171,7 +1355,6 @@ export default function Home({ onNavigate }) {
                     ready.
                   </p>
                 </div>
-
                 <div className="grid grid-cols-3 gap-3 mb-8">
                   {[
                     { label: "Check-ins", value: totalCheckins, icon: "💬" },
@@ -1193,7 +1376,6 @@ export default function Home({ onNavigate }) {
                     </div>
                   ))}
                 </div>
-
                 <div className="flex justify-center mb-8">
                   <button
                     onClick={openChat}
@@ -1202,7 +1384,6 @@ export default function Home({ onNavigate }) {
                     <span>🌙 Talk to Mendi →</span>
                   </button>
                 </div>
-
                 {history.length > 0 ? (
                   <div>
                     <p className="text-slate-600 text-xs font-medium uppercase tracking-wider mb-3">
@@ -1295,7 +1476,13 @@ export default function Home({ onNavigate }) {
                 )}
                 <div ref={bottomRef} />
               </div>
-              <InputBar onSend={handleSend} isTyping={isTyping} />
+
+              <InputBar
+                onSend={handleSend}
+                isTyping={isTyping}
+                lastAiText={lastAiText}
+                speakTrigger={speakTrigger}
+              />
             </>
           )}
         </main>

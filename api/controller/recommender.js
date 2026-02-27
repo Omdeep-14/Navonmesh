@@ -42,19 +42,21 @@ const detectLanguage = async (history) => {
   }
 };
 
-// ── Re-detect mood from night reply ──────────────────────────
-const detectNightMood = async (recentMessages) => {
-  const userMessages = recentMessages
+// ── Re-detect mood from the full day's conversation ──────────
+const detectNightMood = async (history) => {
+  // Use the last 5 user messages to capture current emotional state
+  const userMessages = history
     .filter((m) => m.role === "user")
-    .slice(-3)
+    .slice(-5)
     .map((m) => m.message)
     .join(" | ");
 
   const response = await llm.invoke([
-    new SystemMessage(`You are a mood detector. Given these messages, return ONLY a JSON object:
-      { "mood_label": "anxious", "mood_score": 4 }
+    new SystemMessage(`You are a mood detector. Given these messages from a user throughout their day, return ONLY a JSON object:
+      { "mood_label": "anxious", "mood_score": 4, "context_tags": ["breakup", "work stress", "lonely"] }
       mood_label must be one of: happy, okay, anxious, sad, stressed, angry
-      mood_score is 1-10 where 1=terrible, 10=great`),
+      mood_score is 1-10 where 1=terrible, 10=great
+      context_tags: 1-3 short tags describing WHAT they're going through (e.g. "breakup", "exam stress", "celebration", "family fight", "tired", "excited about trip"). Max 3 tags. Empty array if nothing specific.`),
     new HumanMessage(userMessages),
   ]);
 
@@ -62,15 +64,38 @@ const detectNightMood = async (recentMessages) => {
     const cleaned = response.content.replace(/```json|```/g, "").trim();
     return JSON.parse(cleaned);
   } catch {
-    return { mood_label: "okay", mood_score: 5 };
+    return { mood_label: "okay", mood_score: 5, context_tags: [] };
   }
 };
 
-// ── Decide what to recommend based on mood score ──────────────
-const getRecommendationTypes = (moodScore) => {
-  if (moodScore <= 4) return ["song", "movie", "food"];
-  if (moodScore <= 7) return ["song", "food"];
-  return ["song"];
+// ── Decide what 2 things to recommend based on mood + context ─
+// Logic: always pick exactly 2 out of [song, food, movie]
+// Rules:
+//   score 1-4 (struggling): song + food (comfort — movie feels like too much effort)
+//   score 5-7 (okay): song + food OR song + movie based on context
+//   score 8-10 (good): song + movie (celebratory vibe)
+const getRecommendationTypes = (moodScore, contextTags) => {
+  const heavyContext = contextTags?.some((t) =>
+    [
+      "breakup",
+      "grief",
+      "loss",
+      "lonely",
+      "depressed",
+      "family fight",
+    ].includes(t.toLowerCase()),
+  );
+
+  if (moodScore <= 4) {
+    // Struggling — comfort food + song. No movie (too passive when feeling really low)
+    return ["song", "food"];
+  }
+  if (moodScore <= 7) {
+    // Okay — if heavy emotional context, skip movie (too much commitment). Else song + movie.
+    return heavyContext ? ["song", "food"] : ["song", "movie"];
+  }
+  // Doing well — song + movie to celebrate
+  return ["song", "movie"];
 };
 
 // ── Build Zomato URL from city + dish ────────────────────────
@@ -83,7 +108,7 @@ const getZomatoLink = (city, dish) => {
   return "https://www.zomato.com";
 };
 
-// ── Generate the full recommendation message ──────────────────
+// ── Generate the recommendation message ──────────────────────
 const generateRecommendation = async (
   user,
   checkin,
@@ -91,35 +116,14 @@ const generateRecommendation = async (
   language,
   history,
 ) => {
-  const types = getRecommendationTypes(nightMood.mood_score);
+  const types = getRecommendationTypes(
+    nightMood.mood_score,
+    nightMood.context_tags,
+  );
   const location = [user.area, user.city].filter(Boolean).join(", ");
-
-  const typeInstructions = {
-    song: `SONG: Name ONE specific real song with artist name that fits their mood.
-      Match language: ${language}. Age: ${user.age || "unknown"}.
-      Sad/stressed → soothing or relatable lyrics. Happy → fun vibe.
-      You CAN mention the song name directly — that's natural for a friend to do.
-      Example: "btw put on Kesariya tonight, just trust me" or "Arijit's Tum Hi Ho hits different when you're feeling this way"`,
-
-    movie: `MOVIE: You want to nudge them toward a movie but DON'T name it directly like a robot.
-      Instead hint at it like a friend — describe the vibe or feeling of the movie, then casually drop the name at the end if it flows.
-      Match language: ${language}. Age: ${user.age || "unknown"}.
-      Sad/stressed → something cozy, funny, or comforting — NOT heavy or sad.
-      Example: "there's this movie that's genuinely just warm and stupid in the best way, it's called XYZ, just put it on"`,
-
-    food: `FOOD: Suggest a type of food or cuisine that fits their mood — naturally, like a friend casually mentioning it.
-      Don't just say "order something" — actually hint at what kind of food.
-      ${location ? `They're in ${location} — think about what's common/available there but don't mention the location name.` : ""}
-      Sad/stressed → comfort food: dal chawal energy, hot soup, biryani, whatever fits.
-      Happy → something fun: pizza, chaat, ice cream.
-      Good: "also feels like a biryani kind of night honestly" Bad: "I recommend you eat Pav Bhaji"`,
-  };
-
-  const recommendationsNeeded = types
-    .map((t) => typeInstructions[t])
-    .join("\n\n");
-  const morningMoodContext = checkin
-    ? `They started the day feeling ${checkin.mood_label} (${checkin.mood_score}/10).`
+  const contextTags = nightMood.context_tags || [];
+  const contextSummary = contextTags.length
+    ? `What they're going through: ${contextTags.join(", ")}`
     : "";
 
   const age = user.age;
@@ -139,27 +143,27 @@ const generateRecommendation = async (
 
   const vibeMap = {
     teen: {
-      low: "gentle older sibling energy — soft, simple, caring, no pressure",
+      low: "gentle older sibling energy — soft, simple, caring",
       okay: "chill older sibling — easy and light",
       good: "hyped sibling energy — fun and short",
     },
     young: {
-      low: "close friend who gets it — raw and real, skip the fluff, no toxic positivity",
+      low: "close friend who gets it — real, no toxic positivity",
       okay: "casual college friend just checking in",
       good: "excited friend energy — playful and fun",
     },
     adult: {
-      low: "grounded good friend — warm but not dramatic, real talk, no nonsense",
+      low: "grounded good friend — warm but not dramatic",
       okay: "easy and warm, like a reliable friend",
       good: "genuine and light, happy for them",
     },
     midlife: {
-      low: "steady and calm — like a trusted friend who doesn't overreact",
+      low: "steady and calm — trusted friend who doesn't overreact",
       okay: "warm and easy, just catching up",
       good: "genuinely happy, light and simple",
     },
     senior: {
-      low: "gentle and kind — simple words, very warm, no slang",
+      low: "gentle and kind — simple words, very warm",
       okay: "warm and simple like an old friend",
       good: "warm and cheerful, gentle",
     },
@@ -167,37 +171,92 @@ const generateRecommendation = async (
 
   const messageVibe = vibeMap[ageBucket]?.[moodEnergy] || "warm and casual";
 
+  // ── Per-type instructions with STRONG mood+context awareness ──
+  const typeInstructions = {
+    song: `SONG RECOMMENDATION:
+Pick ONE real song that genuinely fits both their mood AND what they're going through.
+Language: ${language}. Age: ${user.age || "unknown"}.
+${contextSummary}
+Current mood: ${nightMood.mood_label} (${score}/10)
+
+CRITICAL SONG MATCHING RULES — read carefully:
+- If they're going through a breakup/heartbreak → pick something that validates their feeling WITHOUT romanticizing the lost relationship. Good: Olivia Rodrigo's drivers license, Diljit's Ikk Kudi, something empowering or cathartic. BAD: Tum Hi Ho, Raabta, Phir Mohabbat — these glorify the relationship and will hurt more.
+- If they're stressed/anxious → something calming or distracting, NOT something melancholy
+- If they're happy/good → something fun and energetic
+- If they're sad but NOT breakup → something warm and relatable, not more sad
+- Match the language they speak. Hindi/Hinglish user → suggest Hindi/Bollywood songs they'd actually know
+- Mention the song naturally like a friend: "put on X tonight, just trust me" NOT "I recommend listening to X"`,
+
+    food: `FOOD RECOMMENDATION:
+Suggest a specific type of food that matches their mood. Mention it like a friend casually would.
+${location ? `They're in ${location} — think about what's commonly available there but DON'T mention the location name.` : ""}
+${contextSummary}
+Current mood: ${nightMood.mood_label} (${score}/10)
+
+FOOD MATCHING RULES:
+- Breakup/sad/stressed → classic comfort food: biryani, dal chawal, maggi, hot soup, whatever feels like a hug
+- Anxious → something warm and soothing, not heavy
+- Happy/good → something fun or celebratory: pizza, ice cream, chaat
+- Angry → something satisfying to eat: something spicy, or crunchy
+- Mention it naturally: "feels like a biryani kind of night" NOT "I recommend you eat biryani"`,
+
+    movie: `MOVIE RECOMMENDATION:
+Suggest ONE movie that fits their current vibe. Only suggest this if they seem to have energy for it.
+${contextSummary}
+Current mood: ${nightMood.mood_label} (${score}/10)
+Language: ${language}. Age: ${user.age || "unknown"}.
+
+MOVIE MATCHING RULES:
+- Sad/stressed → something light, funny, or heartwarming. NOT a sad or heavy movie
+- Breakup → comedy or something completely distracting, NOT a romance
+- Happy/good → something fun or exciting they'd enjoy
+- Mention it casually: "also there's this movie, it's called X, just put it on" NOT "I recommend watching X"`,
+  };
+
+  const recommendationsNeeded = types
+    .map((t) => typeInstructions[t])
+    .join("\n\n---\n\n");
+
+  // Recent conversation context for the LLM
+  const recentConvo = history
+    .slice(-6)
+    .map((m) => `${m.role === "user" ? user.name : "Mendi"}: ${m.message}`)
+    .join("\n");
+
   const response = await llm.invoke([
     new SystemMessage(`You are texting ${user.name} like a real close friend late at night.
-      They've opened up to you and now you want to wrap up with something thoughtful.
-      Their current mood: ${nightMood.mood_label} (${nightMood.mood_score}/10).
-      ${morningMoodContext}
-      Age: ${user.age || "unknown"}. Language they use: ${language}.
-      Your vibe for this message: ${messageVibe}
-      Here's what to weave into one natural message:
-      ${recommendationsNeeded}
-      RULES:
-      - Write ONE flowing message like a text, not a list
-      - Song name can be dropped naturally
-      - Movie: hint at it casually
-      - Food: mention a type naturally — "biryani energy tonight" not "I recommend biryani"
-      - No bullet points, no bold, no "I recommend", no "you should"
-      - Max 3-4 sentences total
-      - End light — like wrapping up a good late night conversation`),
-    new HumanMessage(
-      `Based on our conversation tonight, what would you suggest for me?`,
-    ),
+You've been talking all day and you know what they're going through.
+Their current mood: ${nightMood.mood_label} (${nightMood.mood_score}/10).
+${contextSummary}
+Age: ${user.age || "unknown"}. Language they use: ${language}.
+Your vibe: ${messageVibe}
+
+Recent conversation:
+${recentConvo}
+
+Now weave EXACTLY ${types.length} recommendations into ONE natural flowing message (${types.join(" + ")}).
+Here are the instructions for each:
+
+${recommendationsNeeded}
+
+FINAL RULES:
+- ONE message, not a list
+- Max 3-4 sentences total
+- Sound like a real friend texting at night, not an AI making suggestions
+- No bullet points, no "I recommend", no "you should", no "here are my picks"
+- The recommendations should feel like they came from knowing this person, not a generic algorithm
+- End the message naturally — like wrapping up a good late-night conversation, low pressure`),
+    new HumanMessage("what should I do tonight?"),
   ]);
 
-  // ── Extract dish name for Zomato search ──
+  // ── Extract dish name for Zomato ──
   let dish = "";
   if (types.includes("food")) {
     try {
       const dishResponse = await llm.invoke([
         new SystemMessage(`Extract ONLY the food or dish type mentioned in this message as a short search term (1-3 words max).
           Return ONLY a JSON object like: { "dish": "biryani" } or { "dish": "hot soup" }
-          If no specific food is mentioned, return { "dish": "" }
-          Just the food name — no extra words.`),
+          If no specific food, return { "dish": "" }`),
         new HumanMessage(response.content),
       ]);
       const cleaned = dishResponse.content.replace(/```json|```/g, "").trim();
@@ -244,11 +303,13 @@ const buildRecommendationEmail = (
   const accent = getMoodAccent(moodLabel);
 
   const tagline =
-    hasMovie && hasSong && hasFood
+    hasSong && hasFood && hasMovie
       ? "a song, a film &amp; something to eat"
       : hasSong && hasFood
         ? "a song &amp; something to eat"
-        : "a song for tonight";
+        : hasSong && hasMovie
+          ? "a song &amp; a film for tonight"
+          : "something for tonight";
 
   const pills = [
     hasSong && typePill("song", "🎵"),
@@ -258,7 +319,6 @@ const buildRecommendationEmail = (
     .filter(Boolean)
     .join("");
 
-  // ── Reply URL carries checkin context ──
   const replyUrl = `${appUrl}/home?reply=${checkinId}&type=night_recommendation`;
   const zomatoUrl = getZomatoLink(city, dish);
 
@@ -293,23 +353,19 @@ const buildRecommendationEmail = (
     <td align="center">
       <table width="520" cellpadding="0" cellspacing="0" role="presentation" style="max-width:520px;width:100%;">
 
-        <!-- wordmark -->
         <tr>
           <td style="padding:0 4px 24px;">
             <span style="font-size:11px;font-weight:800;letter-spacing:4px;text-transform:uppercase;color:${accent.from};">MENDI</span>
           </td>
         </tr>
 
-        <!-- card -->
         <tr>
           <td style="background:#0c1220;border-radius:24px;border:1px solid #131c2e;overflow:hidden;">
 
-            <!-- mood gradient bar -->
             <table width="100%" cellpadding="0" cellspacing="0">
               <tr><td style="height:2px;background:linear-gradient(90deg,${accent.from},${accent.to},transparent);"></td></tr>
             </table>
 
-            <!-- header -->
             <table width="100%" cellpadding="0" cellspacing="0">
               <tr>
                 <td style="padding:36px 44px 24px;">
@@ -328,12 +384,10 @@ const buildRecommendationEmail = (
               </tr>
             </table>
 
-            <!-- thin rule -->
             <table width="100%" cellpadding="0" cellspacing="0">
               <tr><td style="padding:0 44px;"><div style="height:1px;background:#131c2e;"></div></td></tr>
             </table>
 
-            <!-- greeting + message -->
             <table width="100%" cellpadding="0" cellspacing="0">
               <tr>
                 <td style="padding:32px 44px 6px;">
@@ -347,19 +401,16 @@ const buildRecommendationEmail = (
               </tr>
             </table>
 
-            <!-- pills -->
             <table width="100%" cellpadding="0" cellspacing="0">
               <tr><td style="padding:0 44px 32px;">${pills}</td></tr>
             </table>
 
-            <!-- rule -->
             <table width="100%" cellpadding="0" cellspacing="0">
               <tr><td style="padding:0 44px;"><div style="height:1px;background:#131c2e;"></div></td></tr>
             </table>
 
             ${zomatoButton}
 
-            <!-- reply CTA -->
             <table width="100%" cellpadding="0" cellspacing="0">
               <tr>
                 <td style="padding:32px 44px 40px;">
@@ -374,7 +425,6 @@ const buildRecommendationEmail = (
           </td>
         </tr>
 
-        <!-- footer -->
         <tr>
           <td style="padding:24px 4px 0;">
             <table width="100%" cellpadding="0" cellspacing="0">
@@ -412,7 +462,7 @@ export const handleNightRecommendation = async (
     ]);
 
     console.log(
-      `Night recommendation: mood=${nightMood.mood_label}(${nightMood.mood_score}), language=${language}`,
+      `Night recommendation: mood=${nightMood.mood_label}(${nightMood.mood_score}), context=${JSON.stringify(nightMood.context_tags)}, language=${language}`,
     );
 
     const result = await generateRecommendation(
@@ -443,7 +493,7 @@ export const handleNightRecommendation = async (
         user.city,
         result.dish,
         nightMood.mood_label,
-        checkinId, // ← passed so reply URL works
+        checkinId,
       ),
     });
 

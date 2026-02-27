@@ -414,39 +414,54 @@ const processScheduledMessages = async () => {
       );
 
       // ── CHAIN: Schedule next proactive message 10s later ──────
-      // event_followup → schedule evening_checkin in 10s
-      // evening_checkin → schedule night_checkin in 10s
-      // night_checkin → no next (recommendation fires after user replies)
+      // event_followup → evening_checkin → night_checkin → stop
+      // night_checkin never chains — recommendation fires after user replies
       const chainMap = {
         event_followup: "evening_checkin",
         evening_checkin: "night_checkin",
+        // night_checkin intentionally absent — chain ends here
       };
 
       const nextType = chainMap[scheduledMsg.message_type];
       if (nextType) {
-        const isFast = scheduledMsg.is_fast !== false; // default to fast for demo
-        const delayMs = isFast ? 10 * 1000 : getProductionDelay(nextType);
-        const nextScheduledFor = new Date(Date.now() + delayMs).toISOString();
-
-        const { error: chainError } = await supabase
+        // ── DEDUP GUARD: don't chain if next type already pending or sent for this user today ──
+        const { data: existing } = await supabase
           .from("scheduled_messages")
-          .insert({
-            user_id: scheduledMsg.user_id,
-            scheduled_for: nextScheduledFor,
-            message_type: nextType,
-            status: "pending",
-            is_fast: isFast,
-          });
+          .select("id, status")
+          .eq("user_id", scheduledMsg.user_id)
+          .eq("message_type", nextType)
+          .in("status", ["pending", "sent"])
+          .limit(1);
 
-        if (chainError) {
-          console.error(
-            `Failed to chain ${nextType}:`,
-            JSON.stringify(chainError),
+        if (existing?.length) {
+          console.log(
+            `⚠ Skipping chain — ${nextType} already exists (${existing[0].status}) for user ${scheduledMsg.user_id}`,
           );
         } else {
-          console.log(
-            `✓ Chained ${nextType} scheduled for ${nextScheduledFor} (${delayMs / 1000}s from now)`,
-          );
+          const isFast = scheduledMsg.is_fast !== false;
+          const delayMs = isFast ? 10 * 1000 : getProductionDelay(nextType);
+          const nextScheduledFor = new Date(Date.now() + delayMs).toISOString();
+
+          const { error: chainError } = await supabase
+            .from("scheduled_messages")
+            .insert({
+              user_id: scheduledMsg.user_id,
+              scheduled_for: nextScheduledFor,
+              message_type: nextType,
+              status: "pending",
+              is_fast: isFast,
+            });
+
+          if (chainError) {
+            console.error(
+              `Failed to chain ${nextType}:`,
+              JSON.stringify(chainError),
+            );
+          } else {
+            console.log(
+              `✓ Chained ${nextType} for ${user.name} in ${delayMs / 1000}s`,
+            );
+          }
         }
       }
     } catch (err) {

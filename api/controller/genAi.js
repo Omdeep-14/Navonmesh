@@ -85,10 +85,17 @@ const detectMood = async (message) => {
 const detectSelfHarm = async (message) => {
   const response = await llm.invoke([
     new SystemMessage(`You are a safety detector for a mental health app.
-      Analyze the message for ANY signals of self-harm, suicidal ideation, wanting to hurt oneself, or not wanting to live.
-      Be sensitive — include indirect signals like "I want to disappear", "nobody would miss me", "I can't take it anymore".
+      Analyze the message for EXPLICIT signals of self-harm or suicidal intent only.
+      Only return true for messages that CLEARLY express:
+      - Wanting to end their life ("I want to die", "I don't want to live anymore", "I want to kill myself")
+      - Actively planning to hurt themselves ("I'm going to hurt myself", "I have a plan to end it")
+      - Direct statements of suicidal intent ("I'm thinking about suicide", "I want to end it all")
+      Do NOT return true for:
+      - General sadness, stress, or frustration ("I'm so done", "I can't take this anymore", "I hate my life")
+      - Venting or hyperbole ("I want to kill my boss", "this is killing me")
+      - Feeling low, hopeless, or depressed without explicit self-harm intent
       Return ONLY a JSON object: { "self_harm": true } or { "self_harm": false }
-      When in doubt, return true. Do not return anything else.`),
+      When in doubt, return false. Only return true when the intent is unmistakably explicit.`),
     new HumanMessage(message),
   ]);
   try {
@@ -101,22 +108,22 @@ const detectSelfHarm = async (message) => {
 
 // ── Check 2 consecutive low mood days ────────────────────────
 const checkConsecutiveLowMood = async (userId) => {
-  const twoDaysAgo = new Date();
-  twoDaysAgo.setDate(twoDaysAgo.getDate() - 2);
-
+  // Always check the 2 most recent checkins by date — works for both real and demo (virtual) dates
   const { data: recentCheckins } = await supabase
     .from("daily_checkins")
     .select("checkin_date, mood_label, mood_score")
     .eq("user_id", userId)
-    .gte("checkin_date", twoDaysAgo.toISOString().split("T")[0])
-    .order("checkin_date", { ascending: false });
+    .order("checkin_date", { ascending: false })
+    .limit(2);
 
   if (!recentCheckins || recentCheckins.length < 2) return false;
 
   const lowDays = recentCheckins.filter(
     (c) => LOW_MOOD_LABELS.includes(c.mood_label) && c.mood_score <= 5,
   );
-  console.log(`Low mood days in last 2: ${lowDays.length}`);
+  console.log(
+    `Low mood days in last 2 checkins: ${lowDays.length} (dates: ${recentCheckins.map((c) => c.checkin_date).join(", ")})`,
+  );
   return lowDays.length >= 2;
 };
 
@@ -255,8 +262,55 @@ export const morningCheckin = async (req, res) => {
 
     const { message } = req.body;
     const userId = req.user.id;
-    const today = new Date().toISOString().split("T")[0];
     const isFast = req.query.fast === "true";
+
+    // ── Demo day cycling ──────────────────────────────────────
+    // In fast mode: use a virtual date based on how many checkin days exist.
+    // Day 1 = today, Day 2 = today+1, Day 3 = today+2, etc.
+    // This lets the demo advance through multiple days in one sitting.
+    let today;
+    if (isFast) {
+      const { data: allCheckins } = await supabase
+        .from("daily_checkins")
+        .select("checkin_date")
+        .eq("user_id", req.user.id)
+        .order("checkin_date", { ascending: true });
+      const dayOffset = allCheckins?.length > 0 ? allCheckins.length - 1 : 0;
+      // Check if latest checkin has a night_recommendation already — if so, advance to next day
+      const latestDate = allCheckins?.[allCheckins.length - 1]?.checkin_date;
+      if (latestDate) {
+        const { data: latestCheckin } = await supabase
+          .from("daily_checkins")
+          .select("id")
+          .eq("user_id", req.user.id)
+          .eq("checkin_date", latestDate)
+          .single();
+        if (latestCheckin) {
+          const { data: nightRec } = await supabase
+            .from("conversations")
+            .select("id")
+            .eq("user_id", req.user.id)
+            .eq("checkin_id", latestCheckin.id)
+            .eq("message_type", "night_recommendation")
+            .limit(1);
+          if (nightRec?.length > 0) {
+            // Night recommendation already sent for this day — advance to next demo day
+            const nextDay = new Date(latestDate);
+            nextDay.setDate(nextDay.getDate() + 1);
+            today = nextDay.toISOString().split("T")[0];
+            console.log("Demo: advancing to next day →", today);
+          } else {
+            today = latestDate;
+          }
+        } else {
+          today = new Date().toISOString().split("T")[0];
+        }
+      } else {
+        today = new Date().toISOString().split("T")[0];
+      }
+    } else {
+      today = new Date().toISOString().split("T")[0];
+    }
 
     if (!message) return res.status(400).json({ error: "Message is required" });
 
@@ -415,6 +469,7 @@ export const morningCheckin = async (req, res) => {
         },
         events_detected: 0,
         cbt_triggered: cbtTriggered,
+        checkin_date: today, // virtual date — frontend uses this for polling in demo mode
       });
     }
 
@@ -564,6 +619,7 @@ export const morningCheckin = async (req, res) => {
       mood,
       events_detected: events.length,
       cbt_triggered: cbtTriggered,
+      checkin_date: today, // virtual date — frontend uses this for polling in demo mode
     });
   } catch (err) {
     console.error("morningCheckin CRASH:", err);
@@ -597,7 +653,7 @@ export const pollMessages = async (req, res) => {
     .eq("user_id", userId)
     .eq("checkin_id", checkin.id)
     .eq("role", "assistant")
-    .eq("message_type", "morning") // only chat replies — scheduler messages go via email only
+    .neq("message_type", "morning") // morning replies come via data.reply — poll only handles scheduler messages
     .gt("created_at", since)
     .order("created_at", { ascending: true });
 

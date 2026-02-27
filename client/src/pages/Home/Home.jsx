@@ -807,6 +807,9 @@ export default function Home({ onNavigate }) {
   const [chatOpen, setChatOpen] = useState(false);
   const [greeting, setGreeting] = useState(getGreeting());
   const [cbtOpen, setCbtOpen] = useState(false);
+  const [checkinDate, setCheckinDate] = useState(
+    new Date().toISOString().split("T")[0],
+  ); // virtual date for demo
   const bottomRef = useRef(null);
   const deepLinkHandled = useRef(false); // ← guard against StrictMode double-mount
 
@@ -894,7 +897,7 @@ export default function Home({ onNavigate }) {
   const pollRef = useRef(null);
   pollRef.current = async () => {
     const token = localStorage.getItem("token");
-    const today = new Date().toISOString().split("T")[0];
+    const today = checkinDate; // use virtual date (advances in demo mode)
     try {
       const res = await fetch(
         `${import.meta.env.VITE_API_URL}/api/v1/chat/poll?date=${today}`,
@@ -977,33 +980,31 @@ export default function Home({ onNavigate }) {
         return;
       }
       const mood = data.mood?.mood_label || "neutral";
-      const updater = (prev) =>
+      if (data.checkin_date) setCheckinDate(data.checkin_date); // update virtual date for demo day cycling
+
+      // Update user message mood badge
+      const moodUpdater = (prev) =>
         prev.map((m) => (m.id === userMsg.id ? { ...m, mood } : m));
-      setMessages(updater);
-      setAllMessages(updater);
+      setMessages(moodUpdater);
+      setAllMessages(moodUpdater);
       setHistory((prev) => [
         { id: Date.now(), mood, preview: text, timestamp: Date.now() },
         ...prev,
       ]);
-      // Poll immediately so the AI reply comes in with its real DB uuid — prevents duplicates
-      await pollRef.current?.();
-      // Flag CBT button or helpline card on the latest AI message
-      if (data.cbt_triggered || data.self_harm_detected) {
-        setMessages((prev) => {
-          const updated = [...prev];
-          // find last assistant message and tag it
-          for (let i = updated.length - 1; i >= 0; i--) {
-            if (updated[i].role === "assistant") {
-              updated[i] = {
-                ...updated[i],
-                cbt: data.cbt_triggered || false,
-                helpline: data.self_harm_detected || false,
-              };
-              break;
-            }
-          }
-          return updated;
-        });
+
+      // Add AI reply directly from API response — never rely on poll for this
+      // Poll only handles proactive scheduler messages (evening, night, event followup)
+      if (data.reply) {
+        const aiMsg = {
+          id: data.checkin_id + "_" + Date.now(), // stable enough id
+          role: "assistant",
+          content: data.reply,
+          timestamp: Date.now(),
+          cbt: data.cbt_triggered || false,
+          helpline: data.self_harm_detected || false,
+        };
+        setMessages((prev) => [...prev, aiMsg]);
+        setAllMessages((prev) => [...prev, aiMsg]);
       }
     } catch {
       const err = {

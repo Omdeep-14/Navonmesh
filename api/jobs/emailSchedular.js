@@ -175,7 +175,7 @@ const getMoodAccent = (moodLabel) => {
   return accents[moodLabel] || accents.okay;
 };
 
-// ── Styled HTML email — matches night recommendation layout ───
+// ── Styled HTML email ─────────────────────────────────────────
 const buildEmailHtml = (userName, messageText, type, checkinId, moodLabel) => {
   const appUrl = process.env.APP_URL || "http://localhost:5173";
   const replyUrl = `${appUrl}/home?reply=${checkinId}&type=${type}`;
@@ -186,127 +186,60 @@ const buildEmailHtml = (userName, messageText, type, checkinId, moodLabel) => {
     evening_checkin: "☀️",
     night_checkin: "🌙",
   };
-  const headerEmoji = emojiMap[type] || "💛";
-
   const taglineMap = {
     event_followup: "just checking in on that thing",
     evening_checkin: "a quick hello from mendi",
     night_checkin: "checking in before you sleep",
   };
-  const tagline = taglineMap[type] || "a message from mendi";
-
   const labelMap = {
     event_followup: "follow-up",
     evening_checkin: "evening check-in",
     night_checkin: "night check-in",
   };
+
+  const headerEmoji = emojiMap[type] || "💛";
+  const tagline = taglineMap[type] || "a message from mendi";
   const label = labelMap[type] || "check-in";
 
   return `<!DOCTYPE html>
 <html lang="en">
-<head>
-  <meta charset="utf-8"/>
-  <meta name="viewport" content="width=device-width,initial-scale=1.0"/>
-  <title>Mendi</title>
-</head>
-<body style="margin:0;padding:0;background:#06090f;font-family:Helvetica,Arial,sans-serif;-webkit-font-smoothing:antialiased;">
-<table width="100%" cellpadding="0" cellspacing="0" role="presentation" style="background:#06090f;padding:52px 20px 64px;">
-  <tr>
-    <td align="center">
-      <table width="520" cellpadding="0" cellspacing="0" role="presentation" style="max-width:520px;width:100%;">
-
-        <!-- wordmark -->
-        <tr>
-          <td style="padding:0 4px 24px;">
-            <span style="font-size:11px;font-weight:800;letter-spacing:4px;text-transform:uppercase;color:${accent.from};">MENDI</span>
-          </td>
-        </tr>
-
-        <!-- card -->
-        <tr>
-          <td style="background:#0c1220;border-radius:24px;border:1px solid #131c2e;overflow:hidden;">
-
-            <!-- mood gradient bar -->
-            <table width="100%" cellpadding="0" cellspacing="0">
-              <tr><td style="height:2px;background:linear-gradient(90deg,${accent.from},${accent.to},transparent);"></td></tr>
-            </table>
-
-            <!-- header -->
-            <table width="100%" cellpadding="0" cellspacing="0">
-              <tr>
-                <td style="padding:36px 44px 24px;">
-                  <table cellpadding="0" cellspacing="0">
-                    <tr>
-                      <td style="vertical-align:top;padding-top:2px;">
-                        <div style="width:42px;height:42px;background:linear-gradient(135deg,${accent.from},${accent.to});border-radius:13px;text-align:center;line-height:42px;font-size:19px;display:inline-block;">${headerEmoji}</div>
-                      </td>
-                      <td style="padding-left:14px;vertical-align:top;">
-                        <p style="margin:0 0 3px;color:#e2e8f0;font-size:17px;font-weight:700;letter-spacing:-0.2px;">${tagline}</p>
-                        <p style="margin:0;color:#334155;font-size:12px;letter-spacing:0.2px;">${label} from mendi</p>
-                      </td>
-                    </tr>
-                  </table>
-                </td>
-              </tr>
-            </table>
-
-            <!-- thin rule -->
-            <table width="100%" cellpadding="0" cellspacing="0">
-              <tr><td style="padding:0 44px;"><div style="height:1px;background:#131c2e;"></div></td></tr>
-            </table>
-
-            <!-- greeting + message (matches night rec layout) -->
-            <table width="100%" cellpadding="0" cellspacing="0">
-              <tr>
-                <td style="padding:32px 44px 6px;">
-                  <p style="margin:0;color:#334155;font-size:11px;font-weight:700;letter-spacing:2.5px;text-transform:uppercase;">hey ${userName}</p>
-                </td>
-              </tr>
-              <tr>
-                <td style="padding:12px 44px 36px;">
-                  <p style="margin:0;color:#94a3b8;font-size:16px;line-height:1.9;">${messageText}</p>
-                </td>
-              </tr>
-            </table>
-
-            <!-- rule -->
-            <table width="100%" cellpadding="0" cellspacing="0">
-              <tr><td style="padding:0 44px;"><div style="height:1px;background:#131c2e;"></div></td></tr>
-            </table>
-
-            <!-- reply CTA -->
-            <table width="100%" cellpadding="0" cellspacing="0">
-              <tr>
-                <td style="padding:32px 44px 40px;">
-                  <a href="${replyUrl}"
-                     style="display:inline-block;color:${accent.text};text-decoration:none;font-size:13px;font-weight:600;letter-spacing:0.3px;border-bottom:1px solid ${accent.text};padding-bottom:2px;font-family:Helvetica,Arial,sans-serif;">
-                    reply to mendi →
-                  </a>
-                </td>
-              </tr>
-            </table>
-
-          </td>
-        </tr>
-
-        <!-- footer -->
-        <tr>
-          <td style="padding:24px 4px 0;">
-            <table width="100%" cellpadding="0" cellspacing="0">
-              <tr>
-                <td><p style="margin:0;color:#1e293b;font-size:11px;">from your friend at mendi 💛</p></td>
-                <td align="right"><a href="${appUrl}/home" style="color:#1e293b;font-size:11px;text-decoration:none;">open app</a></td>
-              </tr>
-            </table>
-          </td>
-        </tr>
-
-      </table>
-    </td>
-  </tr>
+<head><meta charset="utf-8"/><meta name="viewport" content="width=device-width,initial-scale=1.0"/><title>Mendi</title></head>
+<body style="margin:0;padding:0;background:#06090f;font-family:Helvetica,Arial,sans-serif;">
+<table width="100%" cellpadding="0" cellspacing="0" style="background:#06090f;padding:52px 20px 64px;">
+  <tr><td align="center">
+    <table width="520" cellpadding="0" cellspacing="0" style="max-width:520px;width:100%;">
+      <tr><td style="padding:0 4px 24px;"><span style="font-size:11px;font-weight:800;letter-spacing:4px;text-transform:uppercase;color:${accent.from};">MENDI</span></td></tr>
+      <tr><td style="background:#0c1220;border-radius:24px;border:1px solid #131c2e;overflow:hidden;">
+        <table width="100%" cellpadding="0" cellspacing="0"><tr><td style="height:2px;background:linear-gradient(90deg,${accent.from},${accent.to},transparent);"></td></tr></table>
+        <table width="100%" cellpadding="0" cellspacing="0"><tr><td style="padding:36px 44px 24px;">
+          <table cellpadding="0" cellspacing="0"><tr>
+            <td style="vertical-align:top;padding-top:2px;"><div style="width:42px;height:42px;background:linear-gradient(135deg,${accent.from},${accent.to});border-radius:13px;text-align:center;line-height:42px;font-size:19px;display:inline-block;">${headerEmoji}</div></td>
+            <td style="padding-left:14px;vertical-align:top;">
+              <p style="margin:0 0 3px;color:#e2e8f0;font-size:17px;font-weight:700;">${tagline}</p>
+              <p style="margin:0;color:#334155;font-size:12px;">${label} from mendi</p>
+            </td>
+          </tr></table>
+        </td></tr></table>
+        <table width="100%" cellpadding="0" cellspacing="0"><tr><td style="padding:0 44px;"><div style="height:1px;background:#131c2e;"></div></td></tr></table>
+        <table width="100%" cellpadding="0" cellspacing="0">
+          <tr><td style="padding:32px 44px 6px;"><p style="margin:0;color:#334155;font-size:11px;font-weight:700;letter-spacing:2.5px;text-transform:uppercase;">hey ${userName}</p></td></tr>
+          <tr><td style="padding:12px 44px 36px;"><p style="margin:0;color:#94a3b8;font-size:16px;line-height:1.9;">${messageText}</p></td></tr>
+        </table>
+        <table width="100%" cellpadding="0" cellspacing="0"><tr><td style="padding:0 44px;"><div style="height:1px;background:#131c2e;"></div></td></tr></table>
+        <table width="100%" cellpadding="0" cellspacing="0"><tr><td style="padding:32px 44px 40px;">
+          <a href="${replyUrl}" style="display:inline-block;color:${accent.text};text-decoration:none;font-size:13px;font-weight:600;letter-spacing:0.3px;border-bottom:1px solid ${accent.text};padding-bottom:2px;">reply to mendi →</a>
+        </td></tr></table>
+      </td></tr>
+      <tr><td style="padding:24px 4px 0;">
+        <table width="100%" cellpadding="0" cellspacing="0"><tr>
+          <td><p style="margin:0;color:#1e293b;font-size:11px;">from your friend at mendi 💛</p></td>
+          <td align="right"><a href="${appUrl}/home" style="color:#1e293b;font-size:11px;text-decoration:none;">open app</a></td>
+        </tr></table>
+      </td></tr>
+    </table>
+  </td></tr>
 </table>
-</body>
-</html>`;
+</body></html>`;
 };
 
 // ── Main processor ────────────────────────────────────────────
@@ -344,18 +277,19 @@ const processScheduledMessages = async () => {
         continue;
       }
 
-      const today = new Date().toISOString().split("T")[0];
+      // ── KEY FIX: find checkin by user_id only, ordered by most recent ──
+      // Do NOT filter by today's real date — in demo mode the checkin date
+      // is a virtual date that may not match the real calendar date.
       const { data: checkin } = await supabase
         .from("daily_checkins")
         .select("*")
         .eq("user_id", scheduledMsg.user_id)
-        .eq("checkin_date", today)
+        .order("checkin_date", { ascending: false })
+        .limit(1)
         .single();
 
       if (!checkin) {
-        console.warn(
-          `No checkin found for user ${user.name} on ${today}, skipping`,
-        );
+        console.warn(`No checkin found for user ${user.name}, skipping`);
         await supabase
           .from("scheduled_messages")
           .update({ status: "skipped" })
@@ -363,7 +297,9 @@ const processScheduledMessages = async () => {
         continue;
       }
 
-      console.log(`Checkin found: ${checkin.id}, mood: ${checkin.mood_label}`);
+      console.log(
+        `Checkin found: ${checkin.id} (date: ${checkin.checkin_date}), mood: ${checkin.mood_label}`,
+      );
 
       const history = await getConversationHistory(
         scheduledMsg.user_id,
@@ -385,7 +321,7 @@ const processScheduledMessages = async () => {
         message_type: scheduledMsg.message_type,
       });
 
-      // 2. send email with reply URL
+      // 2. send email
       await sendMail({
         email: user.email,
         subject: getEmailSubject(scheduledMsg.message_type),
@@ -398,7 +334,7 @@ const processScheduledMessages = async () => {
         ),
       });
 
-      // 3. mark as sent
+      // 3. mark sent
       await supabase
         .from("scheduled_messages")
         .update({ status: "sent" })

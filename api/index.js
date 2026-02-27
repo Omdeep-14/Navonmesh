@@ -3,7 +3,7 @@ dotenv.config();
 import cors from "cors";
 
 import express from "express";
-import { startScheduler } from "./jobs/messageSchedular.js";
+import { startScheduler } from "./jobs/emailSchedular.js";
 import authRouter from "./routes/user.routes.js";
 import genAiRouter from "./routes/genAi.routes.js";
 

@@ -68,7 +68,7 @@ function Signup({ onNavigate }) {
       }
       localStorage.setItem("token", data.token);
       localStorage.setItem("user", JSON.stringify(data.user));
-      window.location.href = "/home";
+      onNavigate("home");
     } catch {
       setError("Could not connect to server");
     } finally {

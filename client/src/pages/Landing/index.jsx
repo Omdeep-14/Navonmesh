@@ -2,7 +2,7 @@ import FloatingOrb from "../../components/shared/FloatingOrb";
 import SahaayLogo from "../../components/shared/SahaayLogo";
 import HeroSection from "./HeroSection";
 import FeaturesSection from "./FeaturesSection";
-import HowItWorksSection from "./Howitworkssection";
+import HowItWorksSection from "./HowItWorksSection";
 import CTASection from "./CTASection";
 
 function Landing({ onNavigate }) {

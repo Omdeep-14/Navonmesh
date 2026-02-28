@@ -20,7 +20,7 @@ const HELPLINES = [
   { name: "Vandrevala Foundation", number: "1860-2662-345", hours: "24/7" },
 ];
 
-// ── Fetch today's conversation history from DB ────────────────
+// ── Fetch conversation history ────────────────────────────────
 const getConversationHistory = async (userId, checkinId) => {
   const { data } = await supabase
     .from("conversations")
@@ -31,7 +31,7 @@ const getConversationHistory = async (userId, checkinId) => {
   return data || [];
 };
 
-// ── Build LangChain message array from history ────────────────
+// ── Build LangChain messages ──────────────────────────────────
 const buildMessages = (systemPrompt, history, currentMessage) => {
   const messages = [new SystemMessage(systemPrompt)];
   history.forEach((msg) => {
@@ -45,7 +45,7 @@ const buildMessages = (systemPrompt, history, currentMessage) => {
   return messages;
 };
 
-// ── Extract events from message ───────────────────────────────
+// ── Extract events ────────────────────────────────────────────
 const extractEvents = async (message) => {
   const response = await llm.invoke([
     new SystemMessage(`You are a helper that extracts scheduled events from a message.
@@ -81,21 +81,16 @@ const detectMood = async (message) => {
   }
 };
 
-// ── Detect self-harm signals ──────────────────────────────────
+// ── Detect self-harm ──────────────────────────────────────────
 const detectSelfHarm = async (message) => {
   const response = await llm.invoke([
     new SystemMessage(`You are a safety detector for a mental health app.
-      Analyze the message for EXPLICIT signals of self-harm or suicidal intent only.
       Only return true for messages that CLEARLY express:
-      - Wanting to end their life ("I want to die", "I don't want to live anymore", "I want to kill myself")
-      - Actively planning to hurt themselves ("I'm going to hurt myself", "I have a plan to end it")
-      - Direct statements of suicidal intent ("I'm thinking about suicide", "I want to end it all")
-      Do NOT return true for:
-      - General sadness, stress, or frustration ("I'm so done", "I can't take this anymore", "I hate my life")
-      - Venting or hyperbole ("I want to kill my boss", "this is killing me")
-      - Feeling low, hopeless, or depressed without explicit self-harm intent
-      Return ONLY a JSON object: { "self_harm": true } or { "self_harm": false }
-      When in doubt, return false. Only return true when the intent is unmistakably explicit.`),
+      - Wanting to end their life ("I want to die", "I don't want to live anymore")
+      - Actively planning to hurt themselves
+      - Direct statements of suicidal intent
+      Do NOT return true for general sadness, venting, or hyperbole.
+      Return ONLY: { "self_harm": true } or { "self_harm": false }`),
     new HumanMessage(message),
   ]);
   try {
@@ -114,162 +109,315 @@ const checkConsecutiveLowMood = async (userId) => {
     .eq("user_id", userId)
     .order("checkin_date", { ascending: false })
     .limit(2);
-
   if (!recentCheckins || recentCheckins.length < 2) return false;
-
   const lowDays = recentCheckins.filter(
     (c) => LOW_MOOD_LABELS.includes(c.mood_label) && c.mood_score <= 5,
-  );
-  console.log(
-    `Low mood days in last 2 checkins: ${lowDays.length} (dates: ${recentCheckins.map((c) => c.checkin_date).join(", ")})`,
   );
   return lowDays.length >= 2;
 };
 
-// ── Check if recommendation should trigger ────────────────────
-// Recommendation fires when user has replied 2+ times to ANY proactive email
-const shouldTriggerRecommendation = (history) => {
-  // Already sent?
-  const alreadySent = history.some(
-    (m) => m.message_type === "night_recommendation",
-  );
-  if (alreadySent) return false;
-
-  // Find first proactive assistant message
-  const firstProactiveIndex = history.findIndex(
-    (m) =>
-      m.role === "assistant" &&
-      (m.message_type === "event_followup" ||
-        m.message_type === "evening_checkin" ||
-        m.message_type === "night_checkin"),
-  );
-  if (firstProactiveIndex === -1) return false;
-
-  // Count user messages AFTER the first proactive message
-  const userRepliesAfterProactive = history
-    .slice(firstProactiveIndex + 1)
-    .filter((m) => m.role === "user");
-
-  console.log(
-    `User replies after first proactive msg: ${userRepliesAfterProactive.length}`,
-  );
-  return userRepliesAfterProactive.length >= 2;
+// ── Tone vibe based on age + mood ────────────────────────────
+const getVibe = (age, moodScore) => {
+  const bucket = !age
+    ? "adult"
+    : age <= 15
+      ? "teen"
+      : age <= 22
+        ? "young"
+        : age <= 35
+          ? "adult"
+          : age <= 55
+            ? "midlife"
+            : "senior";
+  const energy = moodScore <= 4 ? "low" : moodScore <= 7 ? "okay" : "good";
+  const vibes = {
+    teen: {
+      low: "gentle older sibling — simple, warm, no preaching",
+      okay: "chill older sibling checking in",
+      good: "hyped sibling energy",
+    },
+    young: {
+      low: "close college friend, real and raw, no fluff",
+      okay: "casual friend catching up",
+      good: "excited friend, playful",
+    },
+    adult: {
+      low: "grounded good friend, warm, no drama",
+      okay: "easy warm friend",
+      good: "genuine and light",
+    },
+    midlife: {
+      low: "steady trusted friend, calm",
+      okay: "warm, easy catchup",
+      good: "warm and light",
+    },
+    senior: {
+      low: "gentle kind old friend, simple words",
+      okay: "warm simple old friend",
+      good: "warm and cheerful",
+    },
+  };
+  return vibes[bucket]?.[energy] || "warm and casual like a good friend";
 };
 
-// ── Helpline email HTML ───────────────────────────────────────
-const buildHelplineEmail = (userName, aiMessage) => {
+// ── Generate a proactive email message with full context ──────
+const generateProactiveMessage = async (type, user, checkin, history) => {
+  const vibe = getVibe(user.age, checkin.mood_score);
+  const morningMsg = history.find((m) => m.role === "user")?.message || "";
+  const recentHistory = history.slice(-8);
+  const conversationContext =
+    recentHistory.length > 1
+      ? `\nConversation so far:\n${recentHistory.map((m) => `${m.role === "user" ? user.name : "You"}: ${m.message}`).join("\n")}`
+      : "";
+
+  console.log(`\n=== generateProactiveMessage [${type}] ===`);
+  console.log(
+    "User:",
+    user.name,
+    "| Mood:",
+    checkin.mood_label,
+    checkin.mood_score,
+  );
+  console.log("Morning msg:", morningMsg);
+  console.log("History length:", history.length);
+
+  const prompt = `You are texting ${user.name} like a real friend — NOT a therapist, NOT an AI.
+Vibe: ${vibe}
+${user.age ? `They are ${user.age} years old.` : ""}
+Their mood today: ${checkin.mood_label} (${checkin.mood_score}/10)
+${conversationContext}
+Morning message: "${morningMsg}"
+
+${
+  type === "evening_checkin"
+    ? "It's evening. Ask something real based on their morning — make them want to reply."
+    : "It's night. Ask something warm and specific before they sleep."
+}
+
+STRICT RULES:
+- Never say "I'm here for you", "you're not alone", "safe space", "you got this", "sending love"
+- Never start with "Hey ${user.name}"
+- Max 2 sentences, like a real text message
+- MUST end with a question
+- Reference what they said — show you remember
+- Write ONLY the message text, nothing else`;
+
+  console.log("Calling LLM with prompt length:", prompt.length);
+
+  const response = await llm.invoke([new SystemMessage(prompt)]);
+
+  console.log("LLM response type:", typeof response.content);
+  console.log("LLM response raw:", JSON.stringify(response.content));
+
+  const raw = response.content;
+  const text =
+    typeof raw === "string"
+      ? raw.trim()
+      : Array.isArray(raw)
+        ? raw
+            .map((b) => b.text || b.content || "")
+            .join("")
+            .trim()
+        : String(raw).trim();
+
+  console.log("Final text:", text);
+  console.log("=== end generateProactiveMessage ===\n");
+
+  if (!text)
+    throw new Error(
+      `generateProactiveMessage returned empty string for type: ${type}`,
+    );
+  return text;
+};
+
+// ── Email HTML builder ────────────────────────────────────────
+const getMoodAccent = (moodLabel) => {
+  const accents = {
+    happy: { from: "#f59e0b", to: "#ef4444", text: "#fbbf24" },
+    okay: { from: "#6366f1", to: "#8b5cf6", text: "#a78bfa" },
+    anxious: { from: "#8b5cf6", to: "#6366f1", text: "#c4b5fd" },
+    sad: { from: "#3b82f6", to: "#6366f1", text: "#93c5fd" },
+    stressed: { from: "#ec4899", to: "#8b5cf6", text: "#f9a8d4" },
+    angry: { from: "#ef4444", to: "#f97316", text: "#fca5a5" },
+  };
+  return accents[moodLabel] || accents.okay;
+};
+
+const buildEmailHtml = (userName, messageText, type, checkinId, moodLabel) => {
   const appUrl = process.env.APP_URL || "http://localhost:5173";
+  const replyUrl = `${appUrl}/home?reply=${checkinId}&type=${type}`;
+  const accent = getMoodAccent(moodLabel);
+  const emojiMap = { evening_checkin: "☀️", night_checkin: "🌙" };
+  const taglineMap = {
+    evening_checkin: "a quick hello from Sahaay",
+    night_checkin: "checking in before you sleep",
+  };
+  const labelMap = {
+    evening_checkin: "evening check-in",
+    night_checkin: "night check-in",
+  };
+
   return `<!DOCTYPE html>
 <html lang="en">
-<head>
-  <meta charset="utf-8"/>
-  <meta name="viewport" content="width=device-width,initial-scale=1.0"/>
-  <title>Mendi</title>
-</head>
-<body style="margin:0;padding:0;background:#06090f;font-family:Helvetica,Arial,sans-serif;-webkit-font-smoothing:antialiased;">
-<table width="100%" cellpadding="0" cellspacing="0" role="presentation" style="background:#06090f;padding:52px 20px 64px;">
+<head><meta charset="utf-8"/><meta name="viewport" content="width=device-width,initial-scale=1.0"/><title>Sahaay</title></head>
+<body style="margin:0;padding:0;background:#06090f;font-family:Helvetica,Arial,sans-serif;">
+<table width="100%" cellpadding="0" cellspacing="0" style="background:#06090f;padding:52px 20px 64px;">
   <tr><td align="center">
-    <table width="520" cellpadding="0" cellspacing="0" role="presentation" style="max-width:520px;width:100%;">
-      <tr><td style="padding:0 4px 24px;">
-        <span style="font-size:11px;font-weight:800;letter-spacing:4px;text-transform:uppercase;color:#8b5cf6;">MENDI</span>
-      </td></tr>
+    <table width="520" cellpadding="0" cellspacing="0" style="max-width:520px;width:100%;">
+      <tr><td style="padding:0 4px 24px;"><span style="font-size:11px;font-weight:800;letter-spacing:4px;text-transform:uppercase;color:${accent.from};">Sahaay</span></td></tr>
       <tr><td style="background:#0c1220;border-radius:24px;border:1px solid #131c2e;overflow:hidden;">
+        <table width="100%" cellpadding="0" cellspacing="0"><tr><td style="height:2px;background:linear-gradient(90deg,${accent.from},${accent.to},transparent);"></td></tr></table>
+        <table width="100%" cellpadding="0" cellspacing="0"><tr><td style="padding:36px 44px 24px;">
+          <table cellpadding="0" cellspacing="0"><tr>
+            <td style="vertical-align:top;padding-top:2px;"><div style="width:42px;height:42px;background:linear-gradient(135deg,${accent.from},${accent.to});border-radius:13px;text-align:center;line-height:42px;font-size:19px;display:inline-block;">${emojiMap[type] || "💛"}</div></td>
+            <td style="padding-left:14px;vertical-align:top;">
+              <p style="margin:0 0 3px;color:#e2e8f0;font-size:17px;font-weight:700;">${taglineMap[type] || "a message from Sahaay"}</p>
+              <p style="margin:0;color:#334155;font-size:12px;">${labelMap[type] || "check-in"} from Sahaay</p>
+            </td>
+          </tr></table>
+        </td></tr></table>
+        <table width="100%" cellpadding="0" cellspacing="0"><tr><td style="padding:0 44px;"><div style="height:1px;background:#131c2e;"></div></td></tr></table>
         <table width="100%" cellpadding="0" cellspacing="0">
-          <tr><td style="height:2px;background:linear-gradient(90deg,#8b5cf6,#6366f1,transparent);"></td></tr>
+          <tr><td style="padding:32px 44px 6px;"><p style="margin:0;color:#334155;font-size:11px;font-weight:700;letter-spacing:2.5px;text-transform:uppercase;">hey ${userName}</p></td></tr>
+          <tr><td style="padding:12px 44px 36px;"><p style="margin:0;color:#94a3b8;font-size:16px;line-height:1.9;">${messageText}</p></td></tr>
         </table>
-        <table width="100%" cellpadding="0" cellspacing="0">
-          <tr><td style="padding:36px 44px 24px;">
-            <table cellpadding="0" cellspacing="0"><tr>
-              <td style="vertical-align:top;padding-top:2px;">
-                <div style="width:42px;height:42px;background:linear-gradient(135deg,#8b5cf6,#6366f1);border-radius:13px;text-align:center;line-height:42px;font-size:19px;display:inline-block;">💜</div>
-              </td>
-              <td style="padding-left:14px;vertical-align:top;">
-                <p style="margin:0 0 3px;color:#e2e8f0;font-size:17px;font-weight:700;letter-spacing:-0.2px;">we're thinking of you</p>
-                <p style="margin:0;color:#334155;font-size:12px;letter-spacing:0.2px;">a note from mendi</p>
-              </td>
-            </tr></table>
-          </td></tr>
-        </table>
-        <table width="100%" cellpadding="0" cellspacing="0">
-          <tr><td style="padding:0 44px;"><div style="height:1px;background:#131c2e;"></div></td></tr>
-        </table>
-        <table width="100%" cellpadding="0" cellspacing="0">
-          <tr><td style="padding:32px 44px 6px;">
-            <p style="margin:0;color:#334155;font-size:11px;font-weight:700;letter-spacing:2.5px;text-transform:uppercase;">hey ${userName}</p>
-          </td></tr>
-          <tr><td style="padding:12px 44px 28px;">
-            <p style="margin:0;color:#94a3b8;font-size:16px;line-height:1.9;">${aiMessage}</p>
-          </td></tr>
-        </table>
-        <table width="100%" cellpadding="0" cellspacing="0">
-          <tr><td style="padding:0 44px;"><div style="height:1px;background:#131c2e;"></div></td></tr>
-        </table>
-        <table width="100%" cellpadding="0" cellspacing="0">
-          <tr><td style="padding:28px 44px 8px;">
-            <p style="color:#334155;font-size:11px;font-weight:700;letter-spacing:1.8px;text-transform:uppercase;margin:0 0 18px 0;">if you need to talk to someone</p>
-            <table cellpadding="0" cellspacing="0" style="margin-bottom:12px;width:100%;">
-              <tr><td style="background:rgba(139,92,246,0.08);border:1px solid rgba(139,92,246,0.2);border-radius:12px;padding:14px 20px;">
-                <p style="margin:0 0 3px;color:#c4b5fd;font-size:13px;font-weight:700;">iCall</p>
-                <p style="margin:0 0 2px;color:#e2e8f0;font-size:18px;font-weight:800;letter-spacing:0.5px;">9152987821</p>
-                <p style="margin:0;color:#475569;font-size:11px;">Mon–Sat, 8am–10pm</p>
-              </td></tr>
-            </table>
-            <table cellpadding="0" cellspacing="0" style="width:100%;">
-              <tr><td style="background:rgba(99,102,241,0.08);border:1px solid rgba(99,102,241,0.2);border-radius:12px;padding:14px 20px;">
-                <p style="margin:0 0 3px;color:#a78bfa;font-size:13px;font-weight:700;">Vandrevala Foundation</p>
-                <p style="margin:0 0 2px;color:#e2e8f0;font-size:18px;font-weight:800;letter-spacing:0.5px;">1860-2662-345</p>
-                <p style="margin:0;color:#475569;font-size:11px;">24/7, free &amp; confidential</p>
-              </td></tr>
-            </table>
-          </td></tr>
-        </table>
-        <table width="100%" cellpadding="0" cellspacing="0">
-          <tr><td style="padding:24px 44px 0;"><div style="height:1px;background:#131c2e;"></div></td></tr>
-        </table>
-        <table width="100%" cellpadding="0" cellspacing="0">
-          <tr><td style="padding:28px 44px 40px;">
-            <a href="${appUrl}/home" style="display:inline-block;color:#c4b5fd;text-decoration:none;font-size:13px;font-weight:600;letter-spacing:0.3px;border-bottom:1px solid #c4b5fd;padding-bottom:2px;font-family:Helvetica,Arial,sans-serif;">
-              open mendi →
-            </a>
-          </td></tr>
-        </table>
+        <table width="100%" cellpadding="0" cellspacing="0"><tr><td style="padding:0 44px;"><div style="height:1px;background:#131c2e;"></div></td></tr></table>
+        <table width="100%" cellpadding="0" cellspacing="0"><tr><td style="padding:32px 44px 40px;">
+          <a href="${replyUrl}" style="display:inline-block;color:${accent.text};text-decoration:none;font-size:13px;font-weight:600;letter-spacing:0.3px;border-bottom:1px solid ${accent.text};padding-bottom:2px;">reply to Sahaay →</a>
+        </td></tr></table>
       </td></tr>
       <tr><td style="padding:24px 4px 0;">
         <table width="100%" cellpadding="0" cellspacing="0"><tr>
-          <td><p style="margin:0;color:#1e293b;font-size:11px;">from your friend at mendi 💛</p></td>
+          <td><p style="margin:0;color:#1e293b;font-size:11px;">from your friend at Sahaay 💛</p></td>
           <td align="right"><a href="${appUrl}/home" style="color:#1e293b;font-size:11px;text-decoration:none;">open app</a></td>
         </tr></table>
       </td></tr>
     </table>
   </td></tr>
 </table>
-</body>
-</html>`;
+</body></html>`;
 };
 
-// ── Safe schedule insert with logging ────────────────────────
-const insertScheduledMessage = async (payload) => {
-  console.log("Inserting scheduled_message:", JSON.stringify(payload));
-  const { data, error } = await supabase
-    .from("scheduled_messages")
-    .insert(payload)
-    .select();
-  if (error) {
-    console.error("scheduled_messages insert FAILED:", JSON.stringify(error));
-  } else {
-    console.log(
-      "✓ scheduled_messages inserted:",
-      data?.map((r) => r.id),
+// ── Helpline email ────────────────────────────────────────────
+const buildHelplineEmail = (userName, aiMessage) => {
+  const appUrl = process.env.APP_URL || "http://localhost:5173";
+  return `<!DOCTYPE html>
+<html lang="en"><head><meta charset="utf-8"/><title>Sahaay</title></head>
+<body style="margin:0;padding:0;background:#06090f;font-family:Helvetica,Arial,sans-serif;">
+<table width="100%" cellpadding="0" cellspacing="0" style="background:#06090f;padding:52px 20px 64px;">
+  <tr><td align="center">
+    <table width="520" cellpadding="0" cellspacing="0" style="max-width:520px;width:100%;">
+      <tr><td style="padding:0 4px 24px;"><span style="font-size:11px;font-weight:800;letter-spacing:4px;text-transform:uppercase;color:#8b5cf6;">Sahaay</span></td></tr>
+      <tr><td style="background:#0c1220;border-radius:24px;border:1px solid #131c2e;overflow:hidden;">
+        <table width="100%" cellpadding="0" cellspacing="0"><tr><td style="height:2px;background:linear-gradient(90deg,#8b5cf6,#6366f1,transparent);"></td></tr></table>
+        <table width="100%" cellpadding="0" cellspacing="0"><tr><td style="padding:36px 44px 24px;">
+          <table cellpadding="0" cellspacing="0"><tr>
+            <td><div style="width:42px;height:42px;background:linear-gradient(135deg,#8b5cf6,#6366f1);border-radius:13px;text-align:center;line-height:42px;font-size:19px;">💜</div></td>
+            <td style="padding-left:14px;">
+              <p style="margin:0 0 3px;color:#e2e8f0;font-size:17px;font-weight:700;">we're thinking of you</p>
+              <p style="margin:0;color:#334155;font-size:12px;">a note from Sahaay</p>
+            </td>
+          </tr></table>
+        </td></tr></table>
+        <table width="100%" cellpadding="0" cellspacing="0"><tr><td style="padding:0 44px;"><div style="height:1px;background:#131c2e;"></div></td></tr></table>
+        <table width="100%" cellpadding="0" cellspacing="0">
+          <tr><td style="padding:32px 44px 6px;"><p style="margin:0;color:#334155;font-size:11px;font-weight:700;letter-spacing:2.5px;text-transform:uppercase;">hey ${userName}</p></td></tr>
+          <tr><td style="padding:12px 44px 28px;"><p style="margin:0;color:#94a3b8;font-size:16px;line-height:1.9;">${aiMessage}</p></td></tr>
+        </table>
+        <table width="100%" cellpadding="0" cellspacing="0"><tr><td style="padding:0 44px;"><div style="height:1px;background:#131c2e;"></div></td></tr></table>
+        <table width="100%" cellpadding="0" cellspacing="0"><tr><td style="padding:28px 44px 8px;">
+          <p style="color:#334155;font-size:11px;font-weight:700;letter-spacing:1.8px;text-transform:uppercase;margin:0 0 18px 0;">if you need to talk to someone</p>
+          <table cellpadding="0" cellspacing="0" style="margin-bottom:12px;width:100%;"><tr><td style="background:rgba(139,92,246,0.08);border:1px solid rgba(139,92,246,0.2);border-radius:12px;padding:14px 20px;">
+            <p style="margin:0 0 3px;color:#c4b5fd;font-size:13px;font-weight:700;">iCall</p>
+            <p style="margin:0 0 2px;color:#e2e8f0;font-size:18px;font-weight:800;">9152987821</p>
+            <p style="margin:0;color:#475569;font-size:11px;">Mon–Sat, 8am–10pm</p>
+          </td></tr></table>
+          <table cellpadding="0" cellspacing="0" style="width:100%;"><tr><td style="background:rgba(99,102,241,0.08);border:1px solid rgba(99,102,241,0.2);border-radius:12px;padding:14px 20px;">
+            <p style="margin:0 0 3px;color:#a78bfa;font-size:13px;font-weight:700;">Vandrevala Foundation</p>
+            <p style="margin:0 0 2px;color:#e2e8f0;font-size:18px;font-weight:800;">1860-2662-345</p>
+            <p style="margin:0;color:#475569;font-size:11px;">24/7, free &amp; confidential</p>
+          </td></tr></table>
+        </td></tr></table>
+        <table width="100%" cellpadding="0" cellspacing="0"><tr><td style="padding:24px 44px 0;"><div style="height:1px;background:#131c2e;"></div></td></tr></table>
+        <table width="100%" cellpadding="0" cellspacing="0"><tr><td style="padding:28px 44px 40px;">
+          <a href="${appUrl}/home" style="color:#c4b5fd;text-decoration:none;font-size:13px;font-weight:600;border-bottom:1px solid #c4b5fd;padding-bottom:2px;">open Sahaay →</a>
+        </td></tr></table>
+      </td></tr>
+    </table>
+  </td></tr>
+</table></body></html>`;
+};
+
+// ── Send a proactive email and save to conversations ──────────
+const sendProactiveEmail = async (type, userId, checkin, user, history) => {
+  try {
+    // Check not already sent today
+    const alreadySent = history.some(
+      (m) => m.message_type === type && m.role === "assistant",
     );
+    if (alreadySent) {
+      console.log(`⚠ ${type} already sent today — skipping`);
+      return;
+    }
+
+    const subjects = {
+      evening_checkin: "checking in on you ☀️",
+      night_checkin: "hope today was good 🌙",
+    };
+    const messageText = await generateProactiveMessage(
+      type,
+      user,
+      checkin,
+      history,
+    );
+
+    console.log(`Generated ${type} message:`, messageText);
+
+    await supabase.from("conversations").insert({
+      user_id: userId,
+      checkin_id: checkin.id,
+      role: "assistant",
+      message: messageText,
+      message_type: type,
+    });
+
+    await sendMail({
+      email: user.email,
+      subject: subjects[type] || "a message from Sahaay 💛",
+      html: buildEmailHtml(
+        user.name,
+        messageText,
+        type,
+        checkin.id,
+        checkin.mood_label,
+      ),
+    });
+
+    console.log(`✓ ${type} email sent to ${user.name}`);
+  } catch (err) {
+    console.error(`✗ Failed to send ${type}:`, err.message);
   }
-  return { data, error };
+};
+
+// ── Figure out what stage of the email chain we're at ────────
+// Returns the message_type of the last proactive assistant message in history
+const getLastProactiveType = (history) => {
+  const proactiveTypes = ["evening_checkin", "night_checkin"];
+  for (let i = history.length - 1; i >= 0; i--) {
+    if (
+      history[i].role === "assistant" &&
+      proactiveTypes.includes(history[i].message_type)
+    ) {
+      return history[i].message_type;
+    }
+  }
+  return null;
 };
 
 // ── Main controller ───────────────────────────────────────────
 export const morningCheckin = async (req, res) => {
   try {
     console.log("=== morningCheckin called ===");
-
     const { message } = req.body;
     const userId = req.user.id;
     const isFast = req.query.fast === "true";
@@ -280,32 +428,28 @@ export const morningCheckin = async (req, res) => {
       const { data: allCheckins } = await supabase
         .from("daily_checkins")
         .select("checkin_date")
-        .eq("user_id", req.user.id)
+        .eq("user_id", userId)
         .order("checkin_date", { ascending: true });
-
       const latestDate = allCheckins?.[allCheckins.length - 1]?.checkin_date;
       if (latestDate) {
         const { data: latestCheckin } = await supabase
           .from("daily_checkins")
           .select("id")
-          .eq("user_id", req.user.id)
+          .eq("user_id", userId)
           .eq("checkin_date", latestDate)
           .single();
-
         if (latestCheckin) {
           const { data: nightRec } = await supabase
             .from("conversations")
             .select("id")
-            .eq("user_id", req.user.id)
+            .eq("user_id", userId)
             .eq("checkin_id", latestCheckin.id)
             .eq("message_type", "night_recommendation")
             .limit(1);
-
           if (nightRec?.length > 0) {
             const nextDay = new Date(latestDate);
             nextDay.setDate(nextDay.getDate() + 1);
             today = nextDay.toISOString().split("T")[0];
-            console.log("Demo: advancing to next day →", today);
           } else {
             today = latestDate;
           }
@@ -326,35 +470,25 @@ export const morningCheckin = async (req, res) => {
       .select("name, email, age, city, area")
       .eq("id", userId)
       .single();
-
-    if (userError || !user) {
-      console.error("User fetch error:", userError);
+    if (userError || !user)
       return res.status(500).json({ error: "Could not fetch user" });
-    }
 
-    console.log("User fetched:", user.name);
-
-    // ── Self-harm detection — runs on EVERY message ───────────
+    // ── Self-harm detection ───────────────────────────────────
     const isSelfHarm = await detectSelfHarm(message);
-    console.log("Self-harm detected:", isSelfHarm);
-
     if (isSelfHarm) {
-      const helplinesText = HELPLINES.map(
-        (h) => `${h.name} (${h.number}, ${h.hours})`,
-      ).join(" or ");
-
-      const selfHarmPrompt = `You are a warm, caring friend texting ${user.name}.
-        They've said something that suggests they might be struggling with thoughts of self-harm or not wanting to be here.
-        Your response must:
-        - Be genuinely warm and human — not clinical or scripted
-        - Acknowledge what they're feeling without minimizing it
-        - Gently mention that real support is available: ${helplinesText}
-        - Keep it short (3-4 sentences max)
-        - Do NOT say "I'm here for you", "you're not alone", "safe space", "it's okay to feel"
-        - Sound like a caring friend who's genuinely worried, not a hotline script
-        - End by encouraging them to reach out to one of those numbers`;
-
+      const helplinesText =
+        "iCall (9152987821, Mon–Sat 8am–10pm) or Vandrevala Foundation (1860-2662-345, 24/7)";
+      const selfHarmPrompt = `You are a warm caring friend texting ${user.name}.
+        They said something suggesting self-harm. Respond warmly (3-4 sentences), weave in helplines naturally: ${helplinesText}.
+        Do NOT say "I'm here for you", "you're not alone", "safe space". End by encouraging them to call.`;
       const aiResponse = await llm.invoke([new SystemMessage(selfHarmPrompt)]);
+      const raw = aiResponse.content;
+      const reply =
+        typeof raw === "string"
+          ? raw
+          : Array.isArray(raw)
+            ? raw.map((b) => b.text || "").join("")
+            : String(raw);
 
       const { data: existingCheckin } = await supabase
         .from("daily_checkins")
@@ -376,7 +510,7 @@ export const morningCheckin = async (req, res) => {
             user_id: userId,
             checkin_id: existingCheckin.id,
             role: "assistant",
-            message: aiResponse.content,
+            message: reply,
             message_type: "morning",
           },
         ]);
@@ -385,11 +519,11 @@ export const morningCheckin = async (req, res) => {
       sendMail({
         email: user.email,
         subject: `we're thinking of you 💜`,
-        html: buildHelplineEmail(user.name, aiResponse.content),
+        html: buildHelplineEmail(user.name, reply),
       }).catch((err) => console.error("Helpline email error:", err.message));
 
       return res.json({
-        reply: aiResponse.content,
+        reply,
         checkin_id: existingCheckin?.id || null,
         mood: { mood_label: "sad", mood_score: 2 },
         events_detected: 0,
@@ -405,33 +539,79 @@ export const morningCheckin = async (req, res) => {
       .eq("checkin_date", today)
       .single();
 
-    console.log(
-      "existingCheckin:",
-      existingCheckin?.id || "none — first checkin of the day",
-    );
-
-    // ── Already checked in — continue conversation ────────────
+    // ── Continuing conversation ───────────────────────────────
     if (existingCheckin) {
       const history = await getConversationHistory(userId, existingCheckin.id);
       const cbtTriggered = await checkConsecutiveLowMood(userId);
-      console.log("CBT triggered:", cbtTriggered);
 
-      const systemPrompt = `You are a warm, empathetic mental health companion — like a close friend, not a therapist.
-        The user's name is ${user.name}.
-        They checked in this morning feeling ${existingCheckin.mood_label} (${existingCheckin.mood_score}/10).
-        You have been talking with them today and remember everything said in this conversation.
-        ${cbtTriggered ? `IMPORTANT: They've been having a rough few days in a row. Be extra warm. At the end of your message, very naturally mention that you have a short exercise that might help them feel a bit lighter — keep it casual and optional-feeling, like "also, I have this little thing that might help if you want to try it".` : ""}
-        Guidelines:
-        - Be warm, human, and conversational — not clinical
-        - Never mention check-ins, sessions, or anything technical
-        - Reference what they said earlier if relevant — show you were listening
-        - Keep it short (2-3 sentences max)
-        - Never say "I'm here for you", "you're not alone", "safe space"
-        - Sound like a real friend, not a wellness app`;
+      // ── KEY: Detect what stage the user is replying to ───────
+      // and send the next email immediately, context-aware
+      const lastProactiveType = getLastProactiveType(history);
+      console.log("Last proactive type:", lastProactiveType);
+
+      if (lastProactiveType === "evening_checkin") {
+        // User replied to evening email → send night_checkin now
+        const nightAlreadySent = history.some(
+          (m) => m.message_type === "night_checkin" && m.role === "assistant",
+        );
+        if (!nightAlreadySent) {
+          console.log(
+            "User replied to evening_checkin → sending night_checkin in 15 sec",
+          );
+          // 15 sec delay after user reply, then fire with fresh context
+          setTimeout(async () => {
+            const freshHistory = await getConversationHistory(
+              userId,
+              existingCheckin.id,
+            );
+            await sendProactiveEmail(
+              "night_checkin",
+              userId,
+              existingCheckin,
+              user,
+              freshHistory,
+            );
+          }, 15 * 1000);
+        }
+      } else if (lastProactiveType === "night_checkin") {
+        // User replied to night email → send recommendation now
+        const recAlreadySent = history.some(
+          (m) => m.message_type === "night_recommendation",
+        );
+        if (!recAlreadySent) {
+          console.log(
+            "User replied to night_checkin → sending recommendation now",
+          );
+          const updatedHistory = [
+            ...history,
+            { role: "user", message, message_type: "morning" },
+          ];
+          handleNightRecommendation(
+            userId,
+            existingCheckin.id,
+            updatedHistory,
+            user,
+            existingCheckin,
+          ).catch((err) => console.error("Recommendation error:", err.message));
+        }
+      }
+
+      // Generate normal chat reply
+      const systemPrompt = `You are a warm empathetic companion like a close friend, not a therapist.
+        User: ${user.name}. Mood today: ${existingCheckin.mood_label} (${existingCheckin.mood_score}/10).
+        ${cbtTriggered ? `They've had rough days in a row. Be extra warm. Casually mention you have a short exercise that might help — keep it optional-feeling.` : ""}
+        Rules: warm, human, conversational. 2-3 sentences max. Never say "I'm here for you", "you're not alone", "safe space".`;
 
       const aiResponse = await llm.invoke(
         buildMessages(systemPrompt, history, message),
       );
+      const raw = aiResponse.content;
+      const reply =
+        typeof raw === "string"
+          ? raw
+          : Array.isArray(raw)
+            ? raw.map((b) => b.text || "").join("")
+            : String(raw);
 
       await supabase.from("conversations").insert([
         {
@@ -445,29 +625,13 @@ export const morningCheckin = async (req, res) => {
           user_id: userId,
           checkin_id: existingCheckin.id,
           role: "assistant",
-          message: aiResponse.content,
+          message: reply,
           message_type: "morning",
         },
       ]);
 
-      // ── Check if recommendation should fire after this reply ──
-      const updatedHistory = await getConversationHistory(
-        userId,
-        existingCheckin.id,
-      );
-      if (shouldTriggerRecommendation(updatedHistory)) {
-        console.log("Triggering night recommendation from chat reply...");
-        handleNightRecommendation(
-          userId,
-          existingCheckin.id,
-          updatedHistory,
-          user,
-          existingCheckin,
-        ).catch((err) => console.error("Recommendation error:", err.message));
-      }
-
       return res.json({
-        reply: aiResponse.content,
+        reply,
         checkin_id: existingCheckin.id,
         mood: {
           mood_label: existingCheckin.mood_label,
@@ -480,15 +644,11 @@ export const morningCheckin = async (req, res) => {
     }
 
     // ── First checkin of the day ──────────────────────────────
-    console.log("Running mood detection and event extraction...");
-
     const [mood, events] = await Promise.all([
       detectMood(message),
       extractEvents(message),
     ]);
-
-    console.log("Mood detected:", mood);
-    console.log("Events detected:", events.length);
+    console.log("Mood:", mood, "Events:", events.length);
 
     const { data: checkin, error: checkinError } = await supabase
       .from("daily_checkins")
@@ -502,119 +662,79 @@ export const morningCheckin = async (req, res) => {
       .select()
       .single();
 
-    if (checkinError) {
-      console.error("Checkin insert error:", JSON.stringify(checkinError));
+    if (checkinError)
       return res.status(500).json({ error: checkinError.message });
-    }
-
     console.log("✓ Checkin created:", checkin.id);
 
     const cbtTriggered = await checkConsecutiveLowMood(userId);
-    console.log("CBT triggered:", cbtTriggered);
 
-    // ── Schedule ONLY the first email (10s in fast mode) ─────
-    // The scheduler will chain the 2nd email 10s after the 1st is sent.
-    // This prevents all 3 emails from being scheduled upfront.
-    if (events.length > 0) {
-      // If there's an event, first email = event_followup
-      for (const event of events) {
-        const eventTime = new Date(event.time);
-        const followUpAt = isFast
-          ? new Date(Date.now() + 10 * 1000) // 10s in demo
-          : new Date(eventTime.getTime() + 2 * 60 * 60 * 1000); // 2h after event in prod
-
-        const { data: savedEvent, error: eventError } = await supabase
-          .from("user_events")
-          .insert({
-            user_id: userId,
-            checkin_id: checkin.id,
-            event_title: event.title,
-            event_time: eventTime.toISOString(),
-            follow_up_at: followUpAt.toISOString(),
-          })
-          .select()
-          .single();
-
-        if (eventError) {
-          console.error(
-            "user_events insert error:",
-            JSON.stringify(eventError),
-          );
-          continue;
-        }
-        console.log("✓ Event saved:", savedEvent.id);
-
-        // Schedule event_followup as first email
-        await insertScheduledMessage({
-          user_id: userId,
-          event_id: savedEvent.id,
-          scheduled_for: followUpAt.toISOString(),
-          message_type: "event_followup",
-          status: "pending",
-          is_fast: isFast,
-        });
-      }
-    } else {
-      // No events — first email = evening_checkin after 10s (demo) or at 7pm (prod)
-      const firstEmailTime = isFast
-        ? new Date(Date.now() + 10 * 1000)
-        : (() => {
-            const t = new Date();
-            t.setHours(19, 0, 0, 0);
-            if (t <= new Date()) t.setDate(t.getDate() + 1);
-            return t;
-          })();
-
-      await insertScheduledMessage({
-        user_id: userId,
-        scheduled_for: firstEmailTime.toISOString(),
-        message_type: "evening_checkin",
-        status: "pending",
-        is_fast: isFast,
-      });
-    }
-
-    // Save user's first message
-    const { error: convError } = await supabase.from("conversations").insert({
+    // Save user message
+    await supabase.from("conversations").insert({
       user_id: userId,
       checkin_id: checkin.id,
       role: "user",
       message,
       message_type: "morning",
     });
-    if (convError)
-      console.error("Conversation insert error:", JSON.stringify(convError));
 
+    // Save any events
+    for (const event of events) {
+      await supabase
+        .from("user_events")
+        .insert({
+          user_id: userId,
+          checkin_id: checkin.id,
+          event_title: event.title,
+          event_time: new Date(event.time).toISOString(),
+        })
+        .catch((e) => console.error("Event save error:", e.message));
+    }
+
+    // ── Send first proactive email immediately (5s delay in demo) ──
+    // In demo mode: evening_checkin fires right away (no cron needed)
+    // In prod: you'd schedule this for 7pm — but for hackathon just fire it
+    // First email fires 15 sec after morning checkin
+    setTimeout(async () => {
+      const freshHistory = await getConversationHistory(userId, checkin.id);
+      await sendProactiveEmail(
+        "evening_checkin",
+        userId,
+        checkin,
+        user,
+        freshHistory,
+      );
+    }, 15 * 1000);
+
+    // Generate AI reply
     const history = await getConversationHistory(userId, checkin.id);
-
-    const systemPrompt = `You are a warm, empathetic mental health companion — like a close friend, not a therapist.
-      The user's name is ${user.name}.
-      Today they checked in feeling ${mood.mood_label} (${mood.mood_score}/10).
-      ${events.length > 0 ? `They have these events today: ${events.map((e) => e.title).join(", ")}` : ""}
-      ${cbtTriggered ? `IMPORTANT: They've been having a rough few days in a row. Be extra warm. At the end of your message, very naturally mention that you have a short exercise that might help — keep it casual, like "also, I have this little thing that might help if you want to try it".` : ""}
-      Guidelines:
-      - Be warm, human, and conversational — not clinical
-      - Acknowledge their feelings genuinely
-      - Keep it short (3-4 sentences max)
-      - Never say "I'm here for you", "you're not alone", "safe space"
-      - Sound like a real friend, not a wellness app`;
+    const systemPrompt = `You are a warm empathetic companion like a close friend, not a therapist.
+      User: ${user.name}. Today: ${mood.mood_label} (${mood.mood_score}/10).
+      ${events.length > 0 ? `Events today: ${events.map((e) => e.title).join(", ")}` : ""}
+      ${cbtTriggered ? `Rough days in a row — be extra warm. Casually mention a short exercise might help.` : ""}
+      Rules: warm, human. 3-4 sentences. Never say "I'm here for you", "you're not alone", "safe space".`;
 
     const aiResponse = await llm.invoke(
       buildMessages(systemPrompt, history, message),
     );
+    const raw = aiResponse.content;
+    const reply =
+      typeof raw === "string"
+        ? raw
+        : Array.isArray(raw)
+          ? raw.map((b) => b.text || "").join("")
+          : String(raw);
 
     await supabase.from("conversations").insert({
       user_id: userId,
       checkin_id: checkin.id,
       role: "assistant",
-      message: aiResponse.content,
+      message: reply,
       message_type: "morning",
     });
 
     console.log("=== morningCheckin complete ===");
-
     res.json({
-      reply: aiResponse.content,
+      reply,
       checkin_id: checkin.id,
       mood,
       events_detected: events.length,
@@ -628,9 +748,6 @@ export const morningCheckin = async (req, res) => {
 };
 
 // ── Poll for new proactive messages ──────────────────────────
-// Returns ALL new assistant messages — morning replies come from data.reply,
-// so we can safely surface proactive messages here for in-chat display.
-// The frontend deduplicates by message id.
 export const pollMessages = async (req, res) => {
   const userId = req.user.id;
   const { date, last_seen } = req.query;
@@ -641,11 +758,8 @@ export const pollMessages = async (req, res) => {
     .eq("user_id", userId)
     .eq("checkin_date", date)
     .single();
-
   if (!checkin) return res.json({ newMessages: [] });
 
-  // Use last_seen cursor — only return messages strictly AFTER it.
-  // Falls back to 30s window if no cursor provided (first poll).
   const since = last_seen
     ? new Date(last_seen).toISOString()
     : new Date(Date.now() - 30_000).toISOString();
@@ -656,19 +770,18 @@ export const pollMessages = async (req, res) => {
     .eq("user_id", userId)
     .eq("checkin_id", checkin.id)
     .eq("role", "assistant")
-    .neq("message_type", "morning") // Morning replies come via data.reply — exclude to avoid duplicates
-    .neq("message_type", "night_recommendation") // Recommendation handled separately
+    .neq("message_type", "morning")
+    .neq("message_type", "night_recommendation")
     .gt("created_at", since)
     .order("created_at", { ascending: true });
 
   res.json({ newMessages: newMessages || [] });
 };
 
-// ── Get context message for email reply deep link ─────────────
+// ── Get context for email deep link ──────────────────────────
 export const getChatContext = async (req, res) => {
   const userId = req.user.id;
   const { checkin_id, type } = req.query;
-
   if (!checkin_id || !type) return res.json({ message: null });
 
   const { data, error } = await supabase
@@ -683,4 +796,16 @@ export const getChatContext = async (req, res) => {
 
   if (error) console.error("getChatContext error:", error.message);
   res.json({ message: data?.[0]?.message || null });
+};
+
+export const getMoodHistory = async (req, res) => {
+  const userId = req.user.id;
+  const { data, error } = await supabase
+    .from("daily_checkins")
+    .select("id, checkin_date, mood_score, mood_label, raw_message")
+    .eq("user_id", userId)
+    .order("checkin_date", { ascending: true });
+
+  if (error) return res.status(500).json({ error: error.message });
+  res.json({ checkins: data || [] });
 };

@@ -1,5 +1,7 @@
-import { useState, useEffect, useRef } from "react";
+import { useState, useEffect, useRef, useMemo } from "react";
 import CBTModal from "../../components/shared/CbtModel";
+
+const API = import.meta.env.VITE_API_URL || "http://localhost:5000";
 
 // ── Speech Recognition hook ───────────────────────────────────
 const useSpeechRecognition = () => {
@@ -150,6 +152,22 @@ const MOOD_EMOJIS = {
   depressed: "😔",
   suicidal: "💜",
 };
+
+const normalizeMood = (label) => {
+  const map = {
+    happy: "happy",
+    okay: "okay",
+    anxious: "anxious",
+    sad: "sad",
+    stressed: "stressed",
+    angry: "angry",
+    depressed: "depressed",
+    calm: "calm",
+    neutral: "neutral",
+  };
+  return map[label] || "neutral";
+};
+
 const getMoodColor = (mood) => MOOD_COLORS[mood] || MOOD_COLORS.neutral;
 const getMoodScore = (mood) => MOOD_SCORE[mood] ?? 50;
 
@@ -309,12 +327,394 @@ const ChatBubble = ({ msg, onOpenCBT }) => {
   );
 };
 
-// ── Mood Line Graph ───────────────────────────────────────────
-const MoodLineGraph = ({ history }) => {
+// ── Gamification Engine ───────────────────────────────────────
+function computeGamification(checkins) {
+  if (!checkins.length)
+    return {
+      streak: 0,
+      longestStreak: 0,
+      stabilityScore: 0,
+      weekProgress: 0,
+      level: 1,
+      xp: 0,
+      xpToNext: 100,
+      badges: [],
+      milestones: [],
+      mean: 0,
+    };
+
+  const sorted = [...checkins].sort(
+    (a, b) => new Date(a.checkin_date) - new Date(b.checkin_date),
+  );
+
+  // Current streak
+  let streak = 0;
+  const today = new Date();
+  today.setHours(0, 0, 0, 0);
+  for (let i = sorted.length - 1; i >= 0; i--) {
+    const d = new Date(sorted[i].checkin_date);
+    d.setHours(0, 0, 0, 0);
+    const diff = Math.round((today - d) / 86400000);
+    if (diff === streak || diff === streak + 1) {
+      streak++;
+    } else break;
+  }
+
+  // Longest streak
+  let longest = 1,
+    cur = 1;
+  for (let i = 1; i < sorted.length; i++) {
+    const prev = new Date(sorted[i - 1].checkin_date);
+    const curr = new Date(sorted[i].checkin_date);
+    const diff = Math.round((curr - prev) / 86400000);
+    if (diff === 1) {
+      cur++;
+      longest = Math.max(longest, cur);
+    } else cur = 1;
+  }
+
+  // Stability score
+  const scores = sorted.map((c) => c.mood_score * 10);
+  const mean = scores.reduce((a, b) => a + b, 0) / scores.length;
+  const variance =
+    scores.reduce((a, b) => a + Math.pow(b - mean, 2), 0) / scores.length;
+  const stabilityScore = Math.max(0, Math.round(100 - Math.sqrt(variance)));
+
+  // Week progress
+  const weekAgo = new Date();
+  weekAgo.setDate(weekAgo.getDate() - 6);
+  weekAgo.setHours(0, 0, 0, 0);
+  const weekCheckins = sorted.filter(
+    (c) => new Date(c.checkin_date) >= weekAgo,
+  );
+  const weekProgress = Math.min(7, weekCheckins.length);
+
+  // XP & level
+  const xp = checkins.length * 10 + streak * 15 + stabilityScore / 2;
+  const level = Math.floor(xp / 100) + 1;
+  const xpToNext = 100 - (xp % 100);
+
+  // Badges
+  const badges = [];
+  if (streak >= 3)
+    badges.push({
+      id: "streak3",
+      icon: "🔥",
+      label: "3-day streak",
+      color: "#f97316",
+    });
+  if (streak >= 7)
+    badges.push({
+      id: "streak7",
+      icon: "⚡",
+      label: "Week warrior",
+      color: "#eab308",
+    });
+  if (streak >= 14)
+    badges.push({
+      id: "streak14",
+      icon: "💎",
+      label: "2-week champion",
+      color: "#06b6d4",
+    });
+  if (stabilityScore >= 70)
+    badges.push({
+      id: "stable",
+      icon: "🌊",
+      label: "Emotionally steady",
+      color: "#6366f1",
+    });
+  if (checkins.length >= 10)
+    badges.push({
+      id: "10",
+      icon: "🌱",
+      label: "10 check-ins",
+      color: "#22c55e",
+    });
+  if (checkins.length >= 30)
+    badges.push({
+      id: "30",
+      icon: "🌳",
+      label: "30 check-ins",
+      color: "#16a34a",
+    });
+  if (mean >= 70)
+    badges.push({
+      id: "thriving",
+      icon: "✨",
+      label: "Thriving",
+      color: "#a855f7",
+    });
+
+  // Milestones on graph
+  const last14 = sorted.slice(-14);
+  const milestones = [];
+  last14.forEach((c, i) => {
+    if (i === 0) return;
+    const diff = c.mood_score - last14[i - 1].mood_score;
+    if (diff >= 3)
+      milestones.push({ index: i, type: "rise", label: `+${diff * 10}%` });
+  });
+  const bestIdx = last14.reduce(
+    (best, c, i) => (c.mood_score > last14[best].mood_score ? i : best),
+    0,
+  );
+  milestones.push({ index: bestIdx, type: "best", label: "best" });
+
+  return {
+    streak,
+    longestStreak: longest,
+    stabilityScore,
+    weekProgress,
+    level,
+    xp: Math.floor(xp),
+    xpToNext: Math.floor(xpToNext),
+    badges,
+    milestones,
+    mean,
+  };
+}
+
+// ── Weekly Ring ───────────────────────────────────────────────
+const WeekRing = ({ progress }) => {
+  const days = ["M", "T", "W", "T", "F", "S", "S"];
+  return (
+    <div className="flex gap-1.5 items-center">
+      {days.map((d, i) => (
+        <div key={i} className="flex flex-col items-center gap-1">
+          <div
+            style={{
+              width: 28,
+              height: 28,
+              borderRadius: "50%",
+              background:
+                i < progress
+                  ? "linear-gradient(135deg,#fbbf24,#fb7185)"
+                  : "rgba(255,255,255,0.06)",
+              border:
+                i < progress ? "none" : "1.5px solid rgba(255,255,255,0.1)",
+              display: "flex",
+              alignItems: "center",
+              justifyContent: "center",
+              fontSize: 11,
+              color: i < progress ? "#0f172a" : "#475569",
+              fontWeight: 700,
+              boxShadow:
+                i < progress ? "0 0 10px rgba(251,191,36,0.4)" : "none",
+              transition: "all 0.3s",
+            }}
+          >
+            {i < progress ? "✓" : d}
+          </div>
+        </div>
+      ))}
+    </div>
+  );
+};
+
+// ── XP Bar ────────────────────────────────────────────────────
+const XPBar = ({ level, xp, xpToNext }) => {
+  const pct = Math.round((1 - xpToNext / 100) * 100);
+  return (
+    <div className="flex items-center gap-3">
+      <div
+        style={{
+          width: 36,
+          height: 36,
+          borderRadius: "50%",
+          background: "linear-gradient(135deg,#6366f1,#a855f7)",
+          display: "flex",
+          alignItems: "center",
+          justifyContent: "center",
+          fontSize: 13,
+          fontWeight: 800,
+          color: "#fff",
+          boxShadow: "0 0 16px rgba(99,102,241,0.5)",
+          flexShrink: 0,
+        }}
+      >
+        {level}
+      </div>
+      <div style={{ flex: 1 }}>
+        <div
+          style={{
+            display: "flex",
+            justifyContent: "space-between",
+            marginBottom: 4,
+          }}
+        >
+          <span style={{ fontSize: 11, color: "#94a3b8" }}>Level {level}</span>
+          <span style={{ fontSize: 11, color: "#475569" }}>
+            {xp} XP • {xpToNext} to next
+          </span>
+        </div>
+        <div
+          style={{
+            height: 6,
+            borderRadius: 99,
+            background: "rgba(255,255,255,0.06)",
+            overflow: "hidden",
+          }}
+        >
+          <div
+            style={{
+              height: "100%",
+              borderRadius: 99,
+              width: `${pct}%`,
+              background: "linear-gradient(90deg,#6366f1,#a855f7)",
+              boxShadow: "0 0 8px rgba(99,102,241,0.6)",
+              transition: "width 1s ease",
+            }}
+          />
+        </div>
+      </div>
+    </div>
+  );
+};
+
+// ── Streak Counter ────────────────────────────────────────────
+const StreakCounter = ({ streak, longest }) => (
+  <div
+    style={{
+      display: "flex",
+      alignItems: "center",
+      gap: 12,
+      background:
+        streak >= 3 ? "rgba(249,115,22,0.1)" : "rgba(255,255,255,0.03)",
+      border: `1px solid ${streak >= 3 ? "rgba(249,115,22,0.3)" : "rgba(255,255,255,0.07)"}`,
+      borderRadius: 16,
+      padding: "10px 16px",
+    }}
+  >
+    <span
+      style={{
+        fontSize: 28,
+        filter: streak >= 3 ? "drop-shadow(0 0 8px #f97316)" : "none",
+      }}
+    >
+      🔥
+    </span>
+    <div>
+      <div style={{ display: "flex", alignItems: "baseline", gap: 4 }}>
+        <span
+          style={{
+            fontSize: 24,
+            fontWeight: 800,
+            color: streak >= 3 ? "#fb923c" : "#64748b",
+          }}
+        >
+          {streak}
+        </span>
+        <span style={{ fontSize: 12, color: "#64748b" }}>day streak</span>
+      </div>
+      <span style={{ fontSize: 11, color: "#475569" }}>
+        Best: {longest} days
+      </span>
+    </div>
+  </div>
+);
+
+// ── Stability Gauge ───────────────────────────────────────────
+const StabilityGauge = ({ score }) => {
+  const color = score >= 70 ? "#34d399" : score >= 50 ? "#fbbf24" : "#f87171";
+  const label = score >= 70 ? "Steady" : score >= 50 ? "Variable" : "Turbulent";
+  return (
+    <div
+      style={{
+        background: "rgba(255,255,255,0.03)",
+        border: "1px solid rgba(255,255,255,0.07)",
+        borderRadius: 16,
+        padding: "10px 16px",
+        textAlign: "center",
+      }}
+    >
+      <div
+        style={{
+          fontSize: 22,
+          fontWeight: 800,
+          color,
+          textShadow: `0 0 12px ${color}80`,
+        }}
+      >
+        {score}
+      </div>
+      <div style={{ fontSize: 10, color: "#475569", marginTop: 2 }}>
+        stability
+      </div>
+      <div
+        style={{
+          fontSize: 10,
+          fontWeight: 600,
+          marginTop: 4,
+          color,
+          background: `${color}15`,
+          borderRadius: 99,
+          padding: "2px 8px",
+          display: "inline-block",
+        }}
+      >
+        {label}
+      </div>
+    </div>
+  );
+};
+
+// ── Badge Strip ───────────────────────────────────────────────
+const BadgeStrip = ({ badges }) => {
+  if (!badges.length)
+    return (
+      <div style={{ fontSize: 12, color: "#334155", fontStyle: "italic" }}>
+        🏆 Earn badges by checking in consistently
+      </div>
+    );
+  return (
+    <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
+      {badges.map((b) => (
+        <div
+          key={b.id}
+          style={{
+            display: "flex",
+            alignItems: "center",
+            gap: 6,
+            background: `${b.color}15`,
+            border: `1px solid ${b.color}40`,
+            borderRadius: 99,
+            padding: "4px 12px",
+            fontSize: 12,
+            color: b.color,
+            fontWeight: 600,
+            boxShadow: `0 0 8px ${b.color}20`,
+          }}
+        >
+          <span>{b.icon}</span> {b.label}
+        </div>
+      ))}
+    </div>
+  );
+};
+
+// ── Gamified Mood Graph ───────────────────────────────────────
+const GamifiedMoodGraph = ({ dbCheckins }) => {
   const canvasRef = useRef(null);
+  const [animPct, setAnimPct] = useState(0);
   const W = 560,
     H = 200,
-    PAD = { top: 20, right: 20, bottom: 30, left: 34 };
+    PAD = { top: 24, right: 20, bottom: 30, left: 34 };
+
+  const game = useMemo(() => computeGamification(dbCheckins), [dbCheckins]);
+
+  // Entrance animation
+  useEffect(() => {
+    setAnimPct(0);
+    let start = null;
+    const animate = (ts) => {
+      if (!start) start = ts;
+      const pct = Math.min(1, (ts - start) / 1200);
+      setAnimPct(pct);
+      if (pct < 1) requestAnimationFrame(animate);
+    };
+    requestAnimationFrame(animate);
+  }, [dbCheckins]);
 
   useEffect(() => {
     const canvas = canvasRef.current;
@@ -328,6 +728,7 @@ const MoodLineGraph = ({ history }) => {
     ctx.scale(dpr, dpr);
     ctx.clearRect(0, 0, W, H);
 
+    // Grid
     ctx.strokeStyle = "rgba(255,255,255,0.04)";
     ctx.lineWidth = 1;
     for (let i = 0; i <= 4; i++) {
@@ -338,16 +739,11 @@ const MoodLineGraph = ({ history }) => {
       ctx.stroke();
     }
 
-    const dayGroups = groupByDay(history);
-    const dayKeys = Object.keys(dayGroups)
-      .sort((a, b) => new Date(a) - new Date(b))
-      .slice(-14);
-    const points = dayKeys.map((day) => {
-      const entries = dayGroups[day];
-      const avg =
-        entries.reduce((s, e) => s + getMoodScore(e.mood), 0) / entries.length;
-      return { day, score: avg, mood: dominantMood(entries) };
-    });
+    const points = dbCheckins.slice(-14).map((c) => ({
+      day: c.checkin_date,
+      score: c.mood_score * 10,
+      mood: normalizeMood(c.mood_label),
+    }));
 
     if (points.length < 2) {
       ctx.fillStyle = "rgba(148,163,184,0.3)";
@@ -362,15 +758,19 @@ const MoodLineGraph = ({ history }) => {
     const xOf = (i) => PAD.left + (i / (points.length - 1)) * gW;
     const yOf = (score) => PAD.top + (1 - score / 100) * gH;
 
+    const drawUpTo = Math.floor(animPct * (points.length - 1));
+    const frac = animPct * (points.length - 1) - drawUpTo;
+
     const grad = ctx.createLinearGradient(PAD.left, 0, W - PAD.right, 0);
     points.forEach((p, i) =>
       grad.addColorStop(i / (points.length - 1), getMoodColor(p.mood).line),
     );
-    ctx.strokeStyle = grad;
-    ctx.lineWidth = 2;
+
+    // Area fill (animated)
+    ctx.save();
     ctx.beginPath();
     ctx.moveTo(xOf(0), yOf(points[0].score));
-    for (let i = 0; i < points.length - 1; i++) {
+    for (let i = 0; i < Math.min(drawUpTo + 1, points.length - 1); i++) {
       const p0 = points[Math.max(i - 1, 0)],
         p1 = points[i];
       const p2 = points[i + 1],
@@ -380,26 +780,118 @@ const MoodLineGraph = ({ history }) => {
       const cp2x =
         xOf(i + 1) - (xOf(Math.min(i + 2, points.length - 1)) - xOf(i)) / 6;
       const cp2y = yOf(p2.score) - (yOf(p3.score) - yOf(p1.score)) / 6;
-      ctx.bezierCurveTo(cp1x, cp1y, cp2x, cp2y, xOf(i + 1), yOf(p2.score));
+      if (i === drawUpTo && frac < 1) {
+        const ex = xOf(i) + (xOf(i + 1) - xOf(i)) * frac;
+        const ey = yOf(p1.score) + (yOf(p2.score) - yOf(p1.score)) * frac;
+        ctx.bezierCurveTo(cp1x, cp1y, cp2x, cp2y, ex, ey);
+      } else {
+        ctx.bezierCurveTo(cp1x, cp1y, cp2x, cp2y, xOf(i + 1), yOf(p2.score));
+      }
+    }
+    const lastX =
+      animPct < 1
+        ? xOf(drawUpTo) +
+          (xOf(Math.min(drawUpTo + 1, points.length - 1)) - xOf(drawUpTo)) *
+            frac
+        : xOf(points.length - 1);
+    ctx.lineTo(lastX, H - PAD.bottom);
+    ctx.lineTo(xOf(0), H - PAD.bottom);
+    ctx.closePath();
+    const areaGrad = ctx.createLinearGradient(0, PAD.top, 0, H - PAD.bottom);
+    areaGrad.addColorStop(0, "rgba(99,102,241,0.18)");
+    areaGrad.addColorStop(1, "rgba(99,102,241,0)");
+    ctx.fillStyle = areaGrad;
+    ctx.fill();
+    ctx.restore();
+
+    // Line (animated)
+    ctx.strokeStyle = grad;
+    ctx.lineWidth = 2.5;
+    ctx.shadowColor = "rgba(99,102,241,0.3)";
+    ctx.shadowBlur = 6;
+    ctx.beginPath();
+    ctx.moveTo(xOf(0), yOf(points[0].score));
+    for (let i = 0; i < Math.min(drawUpTo + 1, points.length - 1); i++) {
+      const p0 = points[Math.max(i - 1, 0)],
+        p1 = points[i];
+      const p2 = points[i + 1],
+        p3 = points[Math.min(i + 2, points.length - 1)];
+      const cp1x = xOf(i) + (xOf(i + 1) - xOf(Math.max(i - 1, 0))) / 6;
+      const cp1y = yOf(p1.score) + (yOf(p2.score) - yOf(p0.score)) / 6;
+      const cp2x =
+        xOf(i + 1) - (xOf(Math.min(i + 2, points.length - 1)) - xOf(i)) / 6;
+      const cp2y = yOf(p2.score) - (yOf(p3.score) - yOf(p1.score)) / 6;
+      if (i === drawUpTo && frac < 1) {
+        const ex = xOf(i) + (xOf(i + 1) - xOf(i)) * frac;
+        const ey = yOf(p1.score) + (yOf(p2.score) - yOf(p1.score)) * frac;
+        ctx.bezierCurveTo(cp1x, cp1y, cp2x, cp2y, ex, ey);
+      } else {
+        ctx.bezierCurveTo(cp1x, cp1y, cp2x, cp2y, xOf(i + 1), yOf(p2.score));
+      }
     }
     ctx.stroke();
+    ctx.shadowBlur = 0;
 
+    // Dots + milestone markers
     points.forEach((p, i) => {
+      if (i > drawUpTo + 1) return;
       const x = xOf(i),
         y = yOf(p.score),
         color = getMoodColor(p.mood).dot;
-      ctx.beginPath();
-      ctx.arc(x, y, 4, 0, Math.PI * 2);
-      ctx.fillStyle = color;
-      ctx.shadowColor = color;
-      ctx.shadowBlur = 10;
-      ctx.fill();
-      ctx.shadowBlur = 0;
-      ctx.fillStyle = "rgba(148,163,184,0.5)";
+      const isBest = game.milestones.some(
+        (m) => m.index === i && m.type === "best",
+      );
+      const isRise = game.milestones.some(
+        (m) => m.index === i && m.type === "rise",
+      );
+
+      if (isBest) {
+        ctx.beginPath();
+        ctx.arc(x, y, 8, 0, Math.PI * 2);
+        ctx.fillStyle = "rgba(251,191,36,0.2)";
+        ctx.fill();
+        ctx.beginPath();
+        ctx.arc(x, y, 5, 0, Math.PI * 2);
+        ctx.fillStyle = "#fbbf24";
+        ctx.shadowColor = "#fbbf24";
+        ctx.shadowBlur = 16;
+        ctx.fill();
+        ctx.shadowBlur = 0;
+        ctx.fillStyle = "#fbbf24";
+        ctx.font = "bold 9px Inter";
+        ctx.textAlign = "center";
+        ctx.fillText("★ best", x, y - 12);
+      } else if (isRise) {
+        const rise = game.milestones.find(
+          (m) => m.index === i && m.type === "rise",
+        );
+        ctx.beginPath();
+        ctx.arc(x, y, 5, 0, Math.PI * 2);
+        ctx.fillStyle = "#34d399";
+        ctx.shadowColor = "#34d399";
+        ctx.shadowBlur = 12;
+        ctx.fill();
+        ctx.shadowBlur = 0;
+        ctx.fillStyle = "#34d399";
+        ctx.font = "bold 9px Inter";
+        ctx.textAlign = "center";
+        ctx.fillText("↑ " + rise.label, x, y - 11);
+      } else {
+        ctx.beginPath();
+        ctx.arc(x, y, 4, 0, Math.PI * 2);
+        ctx.fillStyle = color;
+        ctx.shadowColor = color;
+        ctx.shadowBlur = 10;
+        ctx.fill();
+        ctx.shadowBlur = 0;
+      }
+
+      ctx.fillStyle = "rgba(148,163,184,0.45)";
       ctx.font = "10px Inter, sans-serif";
       ctx.textAlign = "center";
       ctx.fillText(friendlyDay(p.day).split(",")[0], x, H - 5);
     });
+
     [
       ["😊", 90],
       ["—", 50],
@@ -410,10 +902,190 @@ const MoodLineGraph = ({ history }) => {
       ctx.textAlign = "left";
       ctx.fillText(t, 2, yOf(s) + 4);
     });
-  }, [history]);
+  }, [dbCheckins, animPct, game]);
 
   return (
-    <canvas ref={canvasRef} style={{ display: "block", maxWidth: "100%" }} />
+    <div
+      style={{
+        background: "rgba(255,255,255,0.03)",
+        border: "1px solid rgba(255,255,255,0.07)",
+        backdropFilter: "blur(12px)",
+        borderRadius: 20,
+        padding: 20,
+        display: "flex",
+        flexDirection: "column",
+        gap: 16,
+      }}
+    >
+      {/* Header */}
+      <div
+        style={{
+          display: "flex",
+          justifyContent: "space-between",
+          alignItems: "center",
+        }}
+      >
+        <div>
+          <p className="text-slate-500 text-xs font-medium uppercase tracking-wider">
+            Mood Journey
+          </p>
+          <p style={{ color: "#475569", fontSize: 11, marginTop: 2 }}>
+            Last 14 days
+          </p>
+        </div>
+        <StabilityGauge score={game.stabilityScore} />
+      </div>
+
+      {/* XP Bar */}
+      <XPBar level={game.level} xp={game.xp} xpToNext={game.xpToNext} />
+
+      {/* Streak + Week Ring */}
+      <div
+        style={{
+          display: "flex",
+          gap: 12,
+          alignItems: "stretch",
+          flexWrap: "wrap",
+        }}
+      >
+        <StreakCounter streak={game.streak} longest={game.longestStreak} />
+        <div
+          style={{
+            flex: 1,
+            background: "rgba(255,255,255,0.03)",
+            border: "1px solid rgba(255,255,255,0.07)",
+            borderRadius: 16,
+            padding: "10px 16px",
+            minWidth: 180,
+          }}
+        >
+          <p style={{ fontSize: 11, color: "#475569", marginBottom: 8 }}>
+            THIS WEEK
+          </p>
+          <WeekRing progress={game.weekProgress} />
+        </div>
+      </div>
+
+      {/* Canvas */}
+      <div
+        style={{
+          background: "rgba(255,255,255,0.02)",
+          borderRadius: 16,
+          padding: "16px 8px 8px",
+          border: "1px solid rgba(255,255,255,0.05)",
+          overflowX: "auto",
+        }}
+      >
+        <canvas
+          ref={canvasRef}
+          style={{ display: "block", maxWidth: "100%" }}
+        />
+      </div>
+
+      {/* Legend */}
+      <div className="flex flex-wrap gap-4">
+        {[
+          { mood: "happy", label: "Happy / Calm" },
+          { mood: "okay", label: "Okay" },
+          { mood: "anxious", label: "Anxious / Stressed" },
+          { mood: "sad", label: "Sad / Low" },
+        ].map(({ mood, label }) => (
+          <div key={mood} className="flex items-center gap-1.5">
+            <div
+              className="w-2.5 h-2.5 rounded-full"
+              style={{
+                background: getMoodColor(mood).dot,
+                boxShadow: `0 0 6px ${getMoodColor(mood).dot}`,
+              }}
+            />
+            <span className="text-slate-600 text-xs">{label}</span>
+          </div>
+        ))}
+        <div className="flex items-center gap-1.5">
+          <span style={{ fontSize: 11 }}>★</span>
+          <span className="text-slate-600 text-xs">Best day</span>
+        </div>
+      </div>
+
+      {/* Badges */}
+      <div>
+        <p
+          style={{
+            fontSize: 11,
+            color: "#334155",
+            fontWeight: 600,
+            letterSpacing: "0.08em",
+            marginBottom: 8,
+          }}
+        >
+          BADGES EARNED
+        </p>
+        <BadgeStrip badges={game.badges} />
+      </div>
+
+      {/* Next goal nudge */}
+      {game.streak < 7 && (
+        <div
+          style={{
+            background: "rgba(251,191,36,0.06)",
+            border: "1px solid rgba(251,191,36,0.15)",
+            borderRadius: 14,
+            padding: "10px 14px",
+            display: "flex",
+            alignItems: "center",
+            gap: 10,
+          }}
+        >
+          <span style={{ fontSize: 18 }}>🎯</span>
+          <div>
+            <p
+              style={{
+                fontSize: 12,
+                color: "#fbbf24",
+                fontWeight: 600,
+                margin: 0,
+              }}
+            >
+              {7 - game.streak} more day{7 - game.streak !== 1 ? "s" : ""} for
+              Week Warrior badge
+            </p>
+            <p style={{ fontSize: 11, color: "#78716c", margin: "2px 0 0" }}>
+              Check in daily to keep your streak alive
+            </p>
+          </div>
+        </div>
+      )}
+      {game.streak >= 7 && game.stabilityScore < 70 && (
+        <div
+          style={{
+            background: "rgba(99,102,241,0.06)",
+            border: "1px solid rgba(99,102,241,0.2)",
+            borderRadius: 14,
+            padding: "10px 14px",
+            display: "flex",
+            alignItems: "center",
+            gap: 10,
+          }}
+        >
+          <span style={{ fontSize: 18 }}>🌊</span>
+          <div>
+            <p
+              style={{
+                fontSize: 12,
+                color: "#818cf8",
+                fontWeight: 600,
+                margin: 0,
+              }}
+            >
+              Stability score: {game.stabilityScore}/100
+            </p>
+            <p style={{ fontSize: 11, color: "#475569", margin: "2px 0 0" }}>
+              Try a CBT exercise to build emotional steadiness
+            </p>
+          </div>
+        </div>
+      )}
+    </div>
   );
 };
 
@@ -447,7 +1119,7 @@ const Sidebar = ({
         <div className="flex items-center gap-2 mb-4">
           <span className="text-xl">🌙</span>
           <span className="text-base font-bold font-serif text-amber-300">
-            Mendi
+            Sahaay
           </span>
         </div>
         <div className="flex items-center gap-3">
@@ -467,13 +1139,12 @@ const Sidebar = ({
           </div>
         </div>
       </div>
-
       <div
         className="px-3 py-3"
         style={{ borderBottom: "1px solid rgba(255,255,255,0.06)" }}
       >
         {[
-          { id: "chat", icon: "💬", label: "Chat with Mendi" },
+          { id: "chat", icon: "💬", label: "Chat with Sahaay" },
           { id: "history", icon: "📅", label: "Mood History" },
         ].map(({ id, icon, label }) => (
           <button
@@ -514,7 +1185,6 @@ const Sidebar = ({
           </button>
         ))}
       </div>
-
       <div className="flex-1 overflow-y-auto px-3 py-3">
         <p className="text-slate-700 text-xs font-medium uppercase tracking-wider mb-2 px-1">
           Sessions
@@ -567,14 +1237,13 @@ const Sidebar = ({
   );
 };
 
-// ── Input Bar — with mic + speaker baked in ───────────────────
+// ── Input Bar ─────────────────────────────────────────────────
 const InputBar = ({ onSend, isTyping, lastAiText, speakTrigger }) => {
   const [text, setText] = useState("");
   const [isSpeakerOn, setIsSpeakerOn] = useState(true);
   const { isListening, transcript, startListening, stopListening, supported } =
     useSpeechRecognition();
 
-  // Speak AI reply whenever speakTrigger increments
   useEffect(() => {
     if (speakTrigger && isSpeakerOn && lastAiText) speakText(lastAiText);
   }, [speakTrigger]);
@@ -586,7 +1255,6 @@ const InputBar = ({ onSend, isTyping, lastAiText, speakTrigger }) => {
     });
   };
 
-  // Voice input: auto-sends on final transcript
   const handleMic = () => {
     if (isListening) {
       stopListening();
@@ -618,7 +1286,6 @@ const InputBar = ({ onSend, isTyping, lastAiText, speakTrigger }) => {
         backdropFilter: "blur(12px)",
       }}
     >
-      {/* Live transcript preview */}
       {isListening && transcript && (
         <div
           className="mx-4 mt-3 px-4 py-2 rounded-xl text-sm"
@@ -631,9 +1298,7 @@ const InputBar = ({ onSend, isTyping, lastAiText, speakTrigger }) => {
           🎤 {transcript}
         </div>
       )}
-
       <div className="p-4 flex items-end gap-3">
-        {/* Mic button */}
         {supported ? (
           <button
             onClick={handleMic}
@@ -663,8 +1328,6 @@ const InputBar = ({ onSend, isTyping, lastAiText, speakTrigger }) => {
         ) : (
           <button
             disabled
-            title="Not supported in this browser"
-            className="flex-shrink-0 flex items-center justify-center"
             style={{
               width: "44px",
               height: "44px",
@@ -679,8 +1342,6 @@ const InputBar = ({ onSend, isTyping, lastAiText, speakTrigger }) => {
             🎤
           </button>
         )}
-
-        {/* Textarea */}
         <div className="flex-1">
           <textarea
             value={text}
@@ -699,11 +1360,9 @@ const InputBar = ({ onSend, isTyping, lastAiText, speakTrigger }) => {
             }}
           />
         </div>
-
-        {/* Speaker toggle */}
         <button
           onClick={handleSpeaker}
-          title={isSpeakerOn ? "Mute Mendi's voice" : "Enable Mendi's voice"}
+          title={isSpeakerOn ? "Mute Sahaay's voice" : "Enable Sahaay's voice"}
           className="flex-shrink-0 flex items-center justify-center"
           style={{
             width: "44px",
@@ -723,8 +1382,6 @@ const InputBar = ({ onSend, isTyping, lastAiText, speakTrigger }) => {
         >
           {isSpeakerOn ? "🔊" : "🔇"}
         </button>
-
-        {/* Send button */}
         <button
           onClick={handleSend}
           disabled={!text.trim() || isTyping}
@@ -749,36 +1406,51 @@ const InputBar = ({ onSend, isTyping, lastAiText, speakTrigger }) => {
           →
         </button>
       </div>
-
-      <style>{`
-        @keyframes mic-pulse {
-          0%, 100% { box-shadow: 0 0 0 0 rgba(244,63,94,0.5); }
-          50%       { box-shadow: 0 0 0 8px rgba(244,63,94,0); }
-        }
-      `}</style>
+      <style>{`@keyframes mic-pulse { 0%, 100% { box-shadow: 0 0 0 0 rgba(244,63,94,0.5); } 50% { box-shadow: 0 0 0 8px rgba(244,63,94,0); } }`}</style>
     </div>
   );
 };
 
 // ── Mood History View ─────────────────────────────────────────
-const MoodHistoryView = ({ history }) => {
-  const [selectedDay, setSelectedDay] = useState(null);
-  const dayGroups = groupByDay(history);
-  const dayKeys = Object.keys(dayGroups).sort(
-    (a, b) => new Date(b) - new Date(a),
-  );
+const MoodHistoryView = () => {
+  const [dbCheckins, setDbCheckins] = useState([]);
+  const [loading, setLoading] = useState(true);
+  const [selectedCheckin, setSelectedCheckin] = useState(null);
 
-  if (selectedDay) {
-    const entries = dayGroups[selectedDay] || [];
-    const dayMoodCounts = entries.reduce((acc, e) => {
-      acc[e.mood] = (acc[e.mood] || 0) + 1;
-      return acc;
-    }, {});
-    const dayTotal = entries.length;
+  useEffect(() => {
+    const token = localStorage.getItem("token");
+    if (!token) {
+      setLoading(false);
+      return;
+    }
+    fetch(`${API}/api/v1/mood-history`, {
+      headers: { Authorization: `Bearer ${token}` },
+    })
+      .then((r) => r.json())
+      .then((data) => {
+        setDbCheckins(data.checkins || []);
+        setLoading(false);
+      })
+      .catch(() => setLoading(false));
+  }, []);
+
+  if (loading) {
+    return (
+      <div className="flex-1 flex items-center justify-center">
+        <div className="text-center">
+          <div className="w-8 h-8 rounded-full border-2 border-indigo-500 border-t-transparent animate-spin mx-auto mb-3" />
+          <p className="text-slate-500 text-sm">loading your journey...</p>
+        </div>
+      </div>
+    );
+  }
+
+  if (selectedCheckin) {
+    const mood = normalizeMood(selectedCheckin.mood_label);
     return (
       <div className="flex-1 overflow-y-auto p-6">
         <button
-          onClick={() => setSelectedDay(null)}
+          onClick={() => setSelectedCheckin(null)}
           className="flex items-center gap-2 text-sm mb-6"
           style={{ color: "#64748b" }}
           onMouseEnter={(e) => (e.currentTarget.style.color = "#e2e8f0")}
@@ -787,84 +1459,51 @@ const MoodHistoryView = ({ history }) => {
           ← Back to all days
         </button>
         <h2 className="text-2xl font-bold font-serif text-white mb-1">
-          {friendlyDay(selectedDay)}
+          {friendlyDay(selectedCheckin.checkin_date)}
         </h2>
-        <p className="text-slate-500 text-sm mb-6">
-          {entries.length} mood {entries.length !== 1 ? "entries" : "entry"}
-        </p>
-        <div
-          className="rounded-2xl p-5 mb-6"
-          style={{
-            background: "rgba(255,255,255,0.03)",
-            border: "1px solid rgba(255,255,255,0.07)",
-            backdropFilter: "blur(12px)",
-          }}
-        >
-          <p className="text-slate-500 text-xs font-medium uppercase tracking-wider mb-4">
-            Mood breakdown
-          </p>
-          <div className="space-y-3">
-            {Object.entries(dayMoodCounts)
-              .sort((a, b) => b[1] - a[1])
-              .map(([mood, count]) => {
-                const c = getMoodColor(mood),
-                  pct = Math.round((count / dayTotal) * 100);
-                return (
-                  <div key={mood}>
-                    <div className="flex items-center justify-between mb-1">
-                      <span
-                        className={`text-xs font-medium flex items-center gap-2 ${c.label}`}
-                      >
-                        {MOOD_EMOJIS[mood] || "😐"} {mood}
-                      </span>
-                      <span className="text-slate-600 text-xs">{pct}%</span>
-                    </div>
-                    <div
-                      className="h-1 rounded-full overflow-hidden"
-                      style={{ background: "rgba(255,255,255,0.06)" }}
-                    >
-                      <div
-                        className="h-full rounded-full"
-                        style={{
-                          width: `${pct}%`,
-                          background: c.line,
-                          transition: "width 0.8s ease",
-                        }}
-                      />
-                    </div>
-                  </div>
-                );
-              })}
+        <div className="flex items-center gap-3 mb-6">
+          <span className="text-3xl">{MOOD_EMOJIS[mood] || "😐"}</span>
+          <MoodBadge mood={mood} />
+          <span className="text-slate-500 text-sm">
+            {selectedCheckin.mood_score}/10
+          </span>
+        </div>
+        {selectedCheckin.raw_message && (
+          <div
+            className="rounded-2xl p-5"
+            style={{
+              background: "rgba(255,255,255,0.03)",
+              border: "1px solid rgba(255,255,255,0.07)",
+            }}
+          >
+            <p className="text-slate-500 text-xs font-medium uppercase tracking-wider mb-3">
+              what you said
+            </p>
+            <p className="text-slate-300 text-sm leading-relaxed">
+              {selectedCheckin.raw_message}
+            </p>
           </div>
-        </div>
-        <div className="space-y-3">
-          {entries.map((entry) => (
-            <div
-              key={entry.id}
-              className="rounded-2xl p-4 flex items-start gap-3"
-              style={{
-                background: "rgba(255,255,255,0.03)",
-                border: "1px solid rgba(255,255,255,0.07)",
-              }}
-            >
-              <span className="text-2xl">
-                {MOOD_EMOJIS[entry.mood] || "😐"}
-              </span>
-              <div className="flex-1 min-w-0">
-                <p className="text-slate-300 text-sm leading-relaxed">
-                  {entry.preview}
-                </p>
-                <p className="text-slate-600 text-xs mt-1">
-                  {formatTime(entry.timestamp)}
-                </p>
-              </div>
-              <MoodBadge mood={entry.mood} />
-            </div>
-          ))}
-        </div>
+        )}
       </div>
     );
   }
+
+  const avg = dbCheckins.length
+    ? Math.round(
+        dbCheckins.reduce((a, c) => a + c.mood_score, 0) / dbCheckins.length,
+      )
+    : 0;
+  const best = dbCheckins.length
+    ? dbCheckins.reduce((a, b) => (a.mood_score > b.mood_score ? a : b))
+    : null;
+  const dominantLabel = dbCheckins.length
+    ? Object.entries(
+        dbCheckins.reduce((a, c) => {
+          a[c.mood_label] = (a[c.mood_label] || 0) + 1;
+          return a;
+        }, {}),
+      ).sort((a, b) => b[1] - a[1])[0][0]
+    : null;
 
   return (
     <div className="flex-1 overflow-y-auto p-6">
@@ -874,43 +1513,105 @@ const MoodHistoryView = ({ history }) => {
       <p className="text-slate-500 text-sm mb-6" style={{ fontWeight: 300 }}>
         A reflection of your emotional journey
       </p>
-      {history.length > 0 && (
-        <div
-          className="rounded-2xl p-5 mb-6"
-          style={{
-            background: "rgba(255,255,255,0.03)",
-            border: "1px solid rgba(255,255,255,0.07)",
-            backdropFilter: "blur(12px)",
-          }}
-        >
-          <p className="text-slate-500 text-xs font-medium uppercase tracking-wider mb-4">
-            Mood over time
-          </p>
-          <div style={{ overflowX: "auto" }}>
-            <MoodLineGraph history={history} />
-          </div>
-          <div className="flex flex-wrap gap-4 mt-4">
+
+      {dbCheckins.length > 0 && (
+        <>
+          {/* Stats */}
+          <div className="grid grid-cols-3 gap-3 mb-6">
             {[
-              { mood: "happy", label: "Happy / Calm" },
-              { mood: "okay", label: "Okay" },
-              { mood: "anxious", label: "Anxious / Stressed" },
-              { mood: "sad", label: "Sad / Low" },
-            ].map(({ mood, label }) => (
-              <div key={mood} className="flex items-center gap-1.5">
-                <div
-                  className="w-2.5 h-2.5 rounded-full"
-                  style={{
-                    background: getMoodColor(mood).dot,
-                    boxShadow: `0 0 6px ${getMoodColor(mood).dot}`,
-                  }}
-                />
-                <span className="text-slate-600 text-xs">{label}</span>
+              { label: "avg mood", value: `${avg}/10`, color: "#6366f1" },
+              {
+                label: "dominant feeling",
+                value: `${MOOD_EMOJIS[normalizeMood(dominantLabel)] || "😐"} ${dominantLabel}`,
+                color: getMoodColor(normalizeMood(dominantLabel)).dot,
+              },
+              {
+                label: "best day",
+                value: best ? friendlyDay(best.checkin_date) : "—",
+                color: "#f59e0b",
+              },
+            ].map((s) => (
+              <div
+                key={s.label}
+                className="rounded-2xl p-4 text-center"
+                style={{
+                  background: "rgba(255,255,255,0.03)",
+                  border: "1px solid rgba(255,255,255,0.07)",
+                }}
+              >
+                <p
+                  className="font-bold text-base mb-1"
+                  style={{ color: s.color }}
+                >
+                  {s.value}
+                </p>
+                <p className="text-slate-600 text-xs">{s.label}</p>
               </div>
             ))}
           </div>
-        </div>
+
+          {/* ✅ Gamified Graph replaces old MoodLineGraph */}
+          <div className="mb-6">
+            <GamifiedMoodGraph dbCheckins={dbCheckins} />
+          </div>
+
+          {/* Entry list */}
+          <p className="text-slate-600 text-xs font-medium uppercase tracking-wider mb-3">
+            all entries
+          </p>
+          <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
+            {[...dbCheckins].reverse().map((checkin) => {
+              const mood = normalizeMood(checkin.mood_label);
+              const c = getMoodColor(mood);
+              return (
+                <button
+                  key={checkin.id}
+                  onClick={() => setSelectedCheckin(checkin)}
+                  className="text-left rounded-2xl p-4 transition-all duration-300"
+                  style={{
+                    background: "rgba(255,255,255,0.03)",
+                    border: "1px solid rgba(255,255,255,0.07)",
+                  }}
+                  onMouseEnter={(e) => {
+                    e.currentTarget.style.transform = "translateY(-2px)";
+                    e.currentTarget.style.borderColor = `${c.dot}50`;
+                    e.currentTarget.style.background = "rgba(255,255,255,0.05)";
+                  }}
+                  onMouseLeave={(e) => {
+                    e.currentTarget.style.transform = "translateY(0)";
+                    e.currentTarget.style.borderColor =
+                      "rgba(255,255,255,0.07)";
+                    e.currentTarget.style.background = "rgba(255,255,255,0.03)";
+                  }}
+                >
+                  <div className="flex items-start justify-between mb-2">
+                    <div>
+                      <p className="text-white font-medium text-sm">
+                        {friendlyDay(checkin.checkin_date)}
+                      </p>
+                      <p className="text-slate-600 text-xs mt-0.5">
+                        {checkin.mood_score}/10
+                      </p>
+                    </div>
+                    <span className="text-2xl">
+                      {MOOD_EMOJIS[mood] || "😐"}
+                    </span>
+                  </div>
+                  <MoodBadge mood={mood} />
+                  {checkin.raw_message && (
+                    <p className="text-slate-700 text-xs mt-2 truncate">
+                      {checkin.raw_message.slice(0, 60)}
+                      {checkin.raw_message.length > 60 ? "..." : ""}
+                    </p>
+                  )}
+                </button>
+              );
+            })}
+          </div>
+        </>
       )}
-      {dayKeys.length === 0 ? (
+
+      {dbCheckins.length === 0 && (
         <div className="text-center py-20">
           <p className="text-5xl mb-4">🌱</p>
           <p className="text-slate-400">Your mood history will appear here</p>
@@ -920,56 +1621,6 @@ const MoodHistoryView = ({ history }) => {
           >
             Start chatting to track your feelings
           </p>
-        </div>
-      ) : (
-        <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
-          {dayKeys.map((day) => {
-            const entries = dayGroups[day],
-              topMood = dominantMood(entries),
-              c = getMoodColor(topMood);
-            return (
-              <button
-                key={day}
-                onClick={() => setSelectedDay(day)}
-                className="text-left rounded-2xl p-4 transition-all duration-300"
-                style={{
-                  background: "rgba(255,255,255,0.03)",
-                  border: "1px solid rgba(255,255,255,0.07)",
-                  backdropFilter: "blur(8px)",
-                }}
-                onMouseEnter={(e) => {
-                  e.currentTarget.style.transform = "translateY(-2px)";
-                  e.currentTarget.style.borderColor = `${c.dot}50`;
-                  e.currentTarget.style.background = "rgba(255,255,255,0.05)";
-                }}
-                onMouseLeave={(e) => {
-                  e.currentTarget.style.transform = "translateY(0)";
-                  e.currentTarget.style.borderColor = "rgba(255,255,255,0.07)";
-                  e.currentTarget.style.background = "rgba(255,255,255,0.03)";
-                }}
-              >
-                <div className="flex items-start justify-between mb-3">
-                  <div>
-                    <p className="text-white font-medium text-sm">
-                      {friendlyDay(day)}
-                    </p>
-                    <p className="text-slate-600 text-xs mt-0.5">
-                      {entries.length} check-in{entries.length !== 1 ? "s" : ""}
-                    </p>
-                  </div>
-                  <span className="text-2xl">
-                    {MOOD_EMOJIS[topMood] || "😐"}
-                  </span>
-                </div>
-                <div className="flex flex-wrap gap-1.5 mb-2">
-                  {[...new Set(entries.map((e) => e.mood))].map((mood) => (
-                    <MoodBadge key={mood} mood={mood} />
-                  ))}
-                </div>
-                <p className="text-slate-700 text-xs">Tap to see details →</p>
-              </button>
-            );
-          })}
         </div>
       )}
     </div>
@@ -997,8 +1648,6 @@ export default function Home({ onNavigate }) {
   const [checkinDate, setCheckinDate] = useState(
     new Date().toISOString().split("T")[0],
   );
-
-  // ── Audio state (passed down to InputBar) ─────────────────
   const [lastAiText, setLastAiText] = useState("");
   const [speakTrigger, setSpeakTrigger] = useState(0);
 
@@ -1006,13 +1655,11 @@ export default function Home({ onNavigate }) {
   const deepLinkHandled = useRef(false);
   const lastSeenRef = useRef(null);
 
-  // ── Helper: push a new AI text to TTS ────────────────────
   const triggerSpeak = (text) => {
     setLastAiText(text);
     setSpeakTrigger((n) => n + 1);
   };
 
-  // ── Auth + deep link ──────────────────────────────────────
   useEffect(() => {
     const token = localStorage.getItem("token");
     if (!token) {
@@ -1037,8 +1684,10 @@ export default function Home({ onNavigate }) {
     (async () => {
       try {
         const res = await fetch(
-          `${import.meta.env.VITE_API_URL}/api/v1/chat/context?checkin_id=${replyCheckinId}&type=${replyType}`,
-          { headers: { Authorization: `Bearer ${token}` } },
+          `${API}/api/v1/chat/context?checkin_id=${replyCheckinId}&type=${replyType}`,
+          {
+            headers: { Authorization: `Bearer ${token}` },
+          },
         );
         const data = await res.json();
         const content =
@@ -1077,22 +1726,19 @@ export default function Home({ onNavigate }) {
     const id = setInterval(() => setGreeting(getGreeting()), 60_000);
     return () => clearInterval(id);
   }, []);
-
   useEffect(() => {
     bottomRef.current?.scrollIntoView({ behavior: "smooth" });
   }, [messages, isTyping]);
 
-  // ── Poll ──────────────────────────────────────────────────
   const pollRef = useRef(null);
   pollRef.current = async () => {
     const token = localStorage.getItem("token");
     try {
       const params = new URLSearchParams({ date: checkinDate });
       if (lastSeenRef.current) params.append("last_seen", lastSeenRef.current);
-      const res = await fetch(
-        `${import.meta.env.VITE_API_URL}/api/v1/chat/poll?${params}`,
-        { headers: { Authorization: `Bearer ${token}` } },
-      );
+      const res = await fetch(`${API}/api/v1/chat/poll?${params}`, {
+        headers: { Authorization: `Bearer ${token}` },
+      });
       const data = await res.json();
       if (data.newMessages?.length) {
         const newMsgs = data.newMessages
@@ -1112,7 +1758,6 @@ export default function Home({ onNavigate }) {
             const ids = new Set(prev.map((m) => m.id));
             return [...prev, ...newMsgs.filter((m) => !ids.has(m.id))];
           });
-          // Speak the latest proactive message
           triggerSpeak(newMsgs[newMsgs.length - 1].content);
         }
       }
@@ -1127,7 +1772,6 @@ export default function Home({ onNavigate }) {
     return () => clearInterval(id);
   }, [chatOpen]);
 
-  // ── Open chat ─────────────────────────────────────────────
   const openChat = () => {
     lastSeenRef.current = new Date().toISOString();
     const content = `${greeting}, ${user?.name?.split(" ")[0] || "there"} 🌙 How are you feeling right now?`;
@@ -1148,7 +1792,6 @@ export default function Home({ onNavigate }) {
     setMessages(msgs);
   };
 
-  // ── Send ──────────────────────────────────────────────────
   const handleSend = async (text) => {
     const token = localStorage.getItem("token");
     const userMsg = {
@@ -1162,19 +1805,15 @@ export default function Home({ onNavigate }) {
     setAllMessages((prev) => [...prev, userMsg]);
     setIsTyping(true);
     try {
-      const res = await fetch(
-        `${import.meta.env.VITE_API_URL}/api/v1/morning-checkin?fast=true`,
-        {
-          method: "POST",
-          headers: {
-            "Content-Type": "application/json",
-            Authorization: `Bearer ${token}`,
-          },
-          body: JSON.stringify({ message: text }),
+      const res = await fetch(`${API}/api/v1/morning-checkin?fast=true`, {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          Authorization: `Bearer ${token}`,
         },
-      );
+        body: JSON.stringify({ message: text }),
+      });
       const data = await res.json();
-
       if (!res.ok) {
         const err = {
           id: Date.now() + 1,
@@ -1186,11 +1825,9 @@ export default function Home({ onNavigate }) {
         setAllMessages((prev) => [...prev, err]);
         return;
       }
-
       const mood = data.mood?.mood_label || "neutral";
       if (data.checkin_date) setCheckinDate(data.checkin_date);
       lastSeenRef.current = new Date().toISOString();
-
       const moodUpdater = (prev) =>
         prev.map((m) => (m.id === userMsg.id ? { ...m, mood } : m));
       setMessages(moodUpdater);
@@ -1199,7 +1836,6 @@ export default function Home({ onNavigate }) {
         { id: Date.now(), mood, preview: text, timestamp: Date.now() },
         ...prev,
       ]);
-
       if (data.reply) {
         const aiMsg = {
           id: data.checkin_id + "_" + Date.now(),
@@ -1264,7 +1900,6 @@ export default function Home({ onNavigate }) {
           onResetChat={() => setChatOpen(false)}
           onOpenDayChat={openDayChat}
         />
-
         <main className="flex-1 flex flex-col h-full overflow-hidden">
           <header
             className="flex items-center justify-between px-6 py-4 flex-shrink-0"
@@ -1296,12 +1931,12 @@ export default function Home({ onNavigate }) {
                   {activeView === "history"
                     ? "Mood History"
                     : chatOpen
-                      ? "Chat with Mendi"
+                      ? "Chat with Sahaay"
                       : "Dashboard"}
                 </h1>
                 <p className="text-slate-600 text-xs">
                   {activeView === "history"
-                    ? `${history.length} entries`
+                    ? `${totalCheckins} entries`
                     : chatOpen
                       ? "Your companion is here 🌙"
                       : `Welcome back, ${user?.name?.split(" ")[0] || "there"}`}
@@ -1324,7 +1959,7 @@ export default function Home({ onNavigate }) {
               )}
               <button
                 onClick={handleLogout}
-                className="mendi-btn mendi-btn-red mendi-btn-sm"
+                className="Sahaay-btn Sahaay-btn-red Sahaay-btn-sm"
               >
                 <span>Sign out</span>
               </button>
@@ -1332,7 +1967,7 @@ export default function Home({ onNavigate }) {
           </header>
 
           {activeView === "history" ? (
-            <MoodHistoryView history={history} />
+            <MoodHistoryView />
           ) : !chatOpen ? (
             <div className="flex-1 overflow-y-auto px-6 py-10">
               <div className="max-w-xl mx-auto">
@@ -1351,7 +1986,7 @@ export default function Home({ onNavigate }) {
                     🌙
                   </h2>
                   <p className="text-slate-500" style={{ fontWeight: 300 }}>
-                    How are you doing today? Mendi is here whenever you're
+                    How are you doing today? Sahaay is here whenever you're
                     ready.
                   </p>
                 </div>
@@ -1379,9 +2014,9 @@ export default function Home({ onNavigate }) {
                 <div className="flex justify-center mb-8">
                   <button
                     onClick={openChat}
-                    className="mendi-btn mendi-btn-amber mendi-btn-xl"
+                    className="Sahaay-btn Sahaay-btn-amber Sahaay-btn-xl"
                   >
-                    <span>🌙 Talk to Mendi →</span>
+                    <span>🌙 Talk to Sahaay →</span>
                   </button>
                 </div>
                 {history.length > 0 ? (
@@ -1476,7 +2111,6 @@ export default function Home({ onNavigate }) {
                 )}
                 <div ref={bottomRef} />
               </div>
-
               <InputBar
                 onSend={handleSend}
                 isTyping={isTyping}

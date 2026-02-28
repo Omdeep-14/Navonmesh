@@ -88,7 +88,7 @@ const generateProactiveMessage = async (type, user, checkin, history) => {
   );
   const location = [user.area, user.city].filter(Boolean).join(", ");
   const morningMessage = history.find((m) => m.role === "user")?.message || "";
-  const recentHistory = history.slice(-8); // More history for context-aware messages
+  const recentHistory = history.slice(-8);
 
   const baseRules = `
 You are texting ${user.name} like a real friend — NOT a therapist, NOT an AI assistant.
@@ -149,7 +149,6 @@ Write the message:`,
   const systemPrompt = prompts[type] || prompts.evening_checkin;
   const messages = [new SystemMessage(systemPrompt)];
 
-  // Add conversation history into the LLM context
   recentHistory.forEach((msg) => {
     messages.push(
       msg.role === "user"
@@ -173,7 +172,7 @@ const getEmailSubject = (type) => {
     evening_checkin: `checking in on you ☀️`,
     night_checkin: `hope today was good 🌙`,
   };
-  return subjects[type] || `a message from mendi 💛`;
+  return subjects[type] || `a message from Sahaay 💛`;
 };
 
 // ── Mood accent for email ─────────────────────────────────────
@@ -202,7 +201,7 @@ const buildEmailHtml = (userName, messageText, type, checkinId, moodLabel) => {
   };
   const taglineMap = {
     event_followup: "just checking in on that thing",
-    evening_checkin: "a quick hello from mendi",
+    evening_checkin: "a quick hello from Sahaay",
     night_checkin: "checking in before you sleep",
   };
   const labelMap = {
@@ -212,17 +211,17 @@ const buildEmailHtml = (userName, messageText, type, checkinId, moodLabel) => {
   };
 
   const headerEmoji = emojiMap[type] || "💛";
-  const tagline = taglineMap[type] || "a message from mendi";
+  const tagline = taglineMap[type] || "a message from Sahaay";
   const label = labelMap[type] || "check-in";
 
   return `<!DOCTYPE html>
 <html lang="en">
-<head><meta charset="utf-8"/><meta name="viewport" content="width=device-width,initial-scale=1.0"/><title>Mendi</title></head>
+<head><meta charset="utf-8"/><meta name="viewport" content="width=device-width,initial-scale=1.0"/><title>Sahaay</title></head>
 <body style="margin:0;padding:0;background:#06090f;font-family:Helvetica,Arial,sans-serif;">
 <table width="100%" cellpadding="0" cellspacing="0" style="background:#06090f;padding:52px 20px 64px;">
   <tr><td align="center">
     <table width="520" cellpadding="0" cellspacing="0" style="max-width:520px;width:100%;">
-      <tr><td style="padding:0 4px 24px;"><span style="font-size:11px;font-weight:800;letter-spacing:4px;text-transform:uppercase;color:${accent.from};">MENDI</span></td></tr>
+      <tr><td style="padding:0 4px 24px;"><span style="font-size:11px;font-weight:800;letter-spacing:4px;text-transform:uppercase;color:${accent.from};">Sahaay</span></td></tr>
       <tr><td style="background:#0c1220;border-radius:24px;border:1px solid #131c2e;overflow:hidden;">
         <table width="100%" cellpadding="0" cellspacing="0"><tr><td style="height:2px;background:linear-gradient(90deg,${accent.from},${accent.to},transparent);"></td></tr></table>
         <table width="100%" cellpadding="0" cellspacing="0"><tr><td style="padding:36px 44px 24px;">
@@ -230,7 +229,7 @@ const buildEmailHtml = (userName, messageText, type, checkinId, moodLabel) => {
             <td style="vertical-align:top;padding-top:2px;"><div style="width:42px;height:42px;background:linear-gradient(135deg,${accent.from},${accent.to});border-radius:13px;text-align:center;line-height:42px;font-size:19px;display:inline-block;">${headerEmoji}</div></td>
             <td style="padding-left:14px;vertical-align:top;">
               <p style="margin:0 0 3px;color:#e2e8f0;font-size:17px;font-weight:700;">${tagline}</p>
-              <p style="margin:0;color:#334155;font-size:12px;">${label} from mendi</p>
+              <p style="margin:0;color:#334155;font-size:12px;">${label} from Sahaay</p>
             </td>
           </tr></table>
         </td></tr></table>
@@ -241,12 +240,12 @@ const buildEmailHtml = (userName, messageText, type, checkinId, moodLabel) => {
         </table>
         <table width="100%" cellpadding="0" cellspacing="0"><tr><td style="padding:0 44px;"><div style="height:1px;background:#131c2e;"></div></td></tr></table>
         <table width="100%" cellpadding="0" cellspacing="0"><tr><td style="padding:32px 44px 40px;">
-          <a href="${replyUrl}" style="display:inline-block;color:${accent.text};text-decoration:none;font-size:13px;font-weight:600;letter-spacing:0.3px;border-bottom:1px solid ${accent.text};padding-bottom:2px;">reply to mendi →</a>
+          <a href="${replyUrl}" style="display:inline-block;color:${accent.text};text-decoration:none;font-size:13px;font-weight:600;letter-spacing:0.3px;border-bottom:1px solid ${accent.text};padding-bottom:2px;">reply to Sahaay →</a>
         </td></tr></table>
       </td></tr>
       <tr><td style="padding:24px 4px 0;">
         <table width="100%" cellpadding="0" cellspacing="0"><tr>
-          <td><p style="margin:0;color:#1e293b;font-size:11px;">from your friend at mendi 💛</p></td>
+          <td><p style="margin:0;color:#1e293b;font-size:11px;">from your friend at Sahaay 💛</p></td>
           <td align="right"><a href="${appUrl}/home" style="color:#1e293b;font-size:11px;text-decoration:none;">open app</a></td>
         </tr></table>
       </td></tr>
@@ -256,37 +255,29 @@ const buildEmailHtml = (userName, messageText, type, checkinId, moodLabel) => {
 </body></html>`;
 };
 
-// ── Check if recommendation should fire ───────────────────────
-// Fires when there are 2+ user replies AFTER the first proactive email was sent
-const shouldTriggerRecommendation = (history, checkinId) => {
-  // Already sent a recommendation?
-  const alreadySent = history.some(
-    (m) => m.message_type === "night_recommendation",
-  );
-  if (alreadySent) return false;
+// ── Expire stale pending rows (called once on startup) ────────
+const expireStaleMessages = async () => {
+  const cutoff = new Date(Date.now() - 10 * 60 * 1000).toISOString();
+  const { data, error } = await supabase
+    .from("scheduled_messages")
+    .update({ status: "expired" })
+    .eq("status", "pending")
+    .lt("scheduled_for", cutoff)
+    .select("id");
 
-  // Find first proactive message (event_followup or evening_checkin)
-  const firstProactiveIndex = history.findIndex(
-    (m) =>
-      m.role === "assistant" &&
-      (m.message_type === "event_followup" ||
-        m.message_type === "evening_checkin" ||
-        m.message_type === "night_checkin"),
-  );
-  if (firstProactiveIndex === -1) return false;
-
-  // Count user replies AFTER the first proactive message
-  const userRepliesAfterProactive = history
-    .slice(firstProactiveIndex + 1)
-    .filter((m) => m.role === "user");
-
-  console.log(
-    `User replies after first proactive msg: ${userRepliesAfterProactive.length}`,
-  );
-  return userRepliesAfterProactive.length >= 2;
+  if (error) {
+    console.error("Failed to expire stale messages:", error.message);
+  } else if (data?.length) {
+    console.log(`⚠ Expired ${data.length} stale pending message(s) on startup`);
+  }
 };
 
 // ── Main processor ────────────────────────────────────────────
+// NOTE: The scheduler ONLY sends the email that is due.
+// Chaining to the next email happens in genAi.js when the user replies.
+// Flow: morning checkin → schedule noon mail (5s)
+//       user replies to noon mail → genAi.js schedules evening mail (10s)
+//       user replies to evening mail → genAi.js sends night recommendation
 const processScheduledMessages = async () => {
   const now = new Date().toISOString();
 
@@ -321,74 +312,87 @@ const processScheduledMessages = async () => {
         continue;
       }
 
-      // Find most recent checkin for this user (works for demo + real dates)
+      // Find the checkin that was created at or after this scheduled_message was inserted
       const { data: checkin } = await supabase
         .from("daily_checkins")
         .select("*")
         .eq("user_id", scheduledMsg.user_id)
-        .order("checkin_date", { ascending: false })
+        .gte("created_at", scheduledMsg.created_at)
+        .order("created_at", { ascending: true })
         .limit(1)
         .single();
 
-      if (!checkin) {
-        console.warn(`No checkin found for user ${user.name}, skipping`);
+      // Fallback: most recent checkin within last 24h
+      let resolvedCheckin = checkin;
+      if (!resolvedCheckin) {
+        const cutoff24h = new Date(
+          Date.now() - 24 * 60 * 60 * 1000,
+        ).toISOString();
+        const { data: recentCheckin } = await supabase
+          .from("daily_checkins")
+          .select("*")
+          .eq("user_id", scheduledMsg.user_id)
+          .gte("created_at", cutoff24h)
+          .order("checkin_date", { ascending: false })
+          .limit(1)
+          .single();
+        resolvedCheckin = recentCheckin;
+      }
+
+      if (!resolvedCheckin) {
+        console.warn(`No checkin found for user ${user.name} — skipping`);
         await supabase
           .from("scheduled_messages")
           .update({ status: "skipped" })
+          .eq("id", scheduledMsg.id);
+        continue;
+      }
+
+      // Verify the checkin has a morning message (guard against stale rows)
+      const { data: morningMsg } = await supabase
+        .from("conversations")
+        .select("id")
+        .eq("user_id", scheduledMsg.user_id)
+        .eq("checkin_id", resolvedCheckin.id)
+        .eq("role", "user")
+        .eq("message_type", "morning")
+        .limit(1);
+
+      if (!morningMsg?.length) {
+        console.warn(
+          `⚠ No morning message found for checkin ${resolvedCheckin.id} — stale row, expiring`,
+        );
+        await supabase
+          .from("scheduled_messages")
+          .update({ status: "expired" })
           .eq("id", scheduledMsg.id);
         continue;
       }
 
       console.log(
-        `Checkin found: ${checkin.id} (date: ${checkin.checkin_date}), mood: ${checkin.mood_label}`,
+        `Checkin found: ${resolvedCheckin.id} (date: ${resolvedCheckin.checkin_date}), mood: ${resolvedCheckin.mood_label}`,
       );
 
       const history = await getConversationHistory(
         scheduledMsg.user_id,
-        checkin.id,
+        resolvedCheckin.id,
       );
-
-      // ── Check if recommendation should fire BEFORE sending next email ──
-      // This handles the case where user has replied 2+ times to proactive emails
-      if (shouldTriggerRecommendation(history, checkin.id)) {
-        console.log(
-          `Recommendation trigger detected for ${user.name} — firing recommendation instead`,
-        );
-        await handleNightRecommendation(
-          scheduledMsg.user_id,
-          checkin.id,
-          history,
-          user,
-          checkin,
-        ).catch((err) => console.error("Recommendation error:", err.message));
-
-        // Mark this scheduled message as skipped since recommendation supersedes it
-        await supabase
-          .from("scheduled_messages")
-          .update({ status: "skipped" })
-          .eq("id", scheduledMsg.id);
-        continue;
-      }
 
       const messageText = await generateProactiveMessage(
         scheduledMsg.message_type,
         user,
-        checkin,
+        resolvedCheckin,
         history,
       );
 
-      // 1. Save to conversations (with message_type so poll can surface it)
-      const { data: savedConv } = await supabase
-        .from("conversations")
-        .insert({
-          user_id: scheduledMsg.user_id,
-          checkin_id: checkin.id,
-          role: "assistant",
-          message: messageText,
-          message_type: scheduledMsg.message_type,
-        })
-        .select()
-        .single();
+      // 1. Save to conversations
+      await supabase.from("conversations").insert({
+        user_id: scheduledMsg.user_id,
+        checkin_id: resolvedCheckin.id,
+        role: "assistant",
+        message: messageText,
+        message_type: scheduledMsg.message_type,
+      });
 
       // 2. Send email
       await sendMail({
@@ -398,12 +402,12 @@ const processScheduledMessages = async () => {
           user.name,
           messageText,
           scheduledMsg.message_type,
-          checkin.id,
-          checkin.mood_label,
+          resolvedCheckin.id,
+          resolvedCheckin.mood_label,
         ),
       });
 
-      // 3. Mark this message as sent
+      // 3. Mark sent — chaining happens in genAi.js when user replies
       await supabase
         .from("scheduled_messages")
         .update({ status: "sent" })
@@ -412,58 +416,9 @@ const processScheduledMessages = async () => {
       console.log(
         `✓ Sent ${scheduledMsg.message_type} to ${user.name} (${user.email})`,
       );
-
-      // ── CHAIN: Schedule next proactive message 10s later ──────
-      // event_followup → evening_checkin → night_checkin → stop
-      // night_checkin never chains — recommendation fires after user replies
-      const chainMap = {
-        event_followup: "evening_checkin",
-        evening_checkin: "night_checkin",
-        // night_checkin intentionally absent — chain ends here
-      };
-
-      const nextType = chainMap[scheduledMsg.message_type];
-      if (nextType) {
-        // ── DEDUP GUARD: don't chain if next type already pending or sent for this user today ──
-        const { data: existing } = await supabase
-          .from("scheduled_messages")
-          .select("id, status")
-          .eq("user_id", scheduledMsg.user_id)
-          .eq("message_type", nextType)
-          .in("status", ["pending", "sent"])
-          .limit(1);
-
-        if (existing?.length) {
-          console.log(
-            `⚠ Skipping chain — ${nextType} already exists (${existing[0].status}) for user ${scheduledMsg.user_id}`,
-          );
-        } else {
-          const isFast = scheduledMsg.is_fast !== false;
-          const delayMs = isFast ? 10 * 1000 : getProductionDelay(nextType);
-          const nextScheduledFor = new Date(Date.now() + delayMs).toISOString();
-
-          const { error: chainError } = await supabase
-            .from("scheduled_messages")
-            .insert({
-              user_id: scheduledMsg.user_id,
-              scheduled_for: nextScheduledFor,
-              message_type: nextType,
-              status: "pending",
-              is_fast: isFast,
-            });
-
-          if (chainError) {
-            console.error(
-              `Failed to chain ${nextType}:`,
-              JSON.stringify(chainError),
-            );
-          } else {
-            console.log(
-              `✓ Chained ${nextType} for ${user.name} in ${delayMs / 1000}s`,
-            );
-          }
-        }
-      }
+      console.log(
+        `  Next email will be scheduled when ${user.name} replies via the deep link.`,
+      );
     } catch (err) {
       console.error(`✗ Failed to process message ${scheduledMsg.id}:`);
       console.error(`  Message: ${err.message}`);
@@ -472,8 +427,8 @@ const processScheduledMessages = async () => {
   }
 };
 
-// ── Production delays for real (non-demo) mode ───────────────
-const getProductionDelay = (type) => {
+// ── Production delays ─────────────────────────────────────────
+export const getProductionDelay = (type) => {
   const now = new Date();
   const target = new Date();
 
@@ -487,11 +442,12 @@ const getProductionDelay = (type) => {
     if (target <= now) target.setDate(target.getDate() + 1);
     return target.getTime() - now.getTime();
   }
-  return 2 * 60 * 60 * 1000; // 2h default for event followup
+  return 2 * 60 * 60 * 1000;
 };
 
 // ── Start the cron job ────────────────────────────────────────
 export const startScheduler = () => {
+  expireStaleMessages();
   cron.schedule("* * * * *", processScheduledMessages);
   console.log("Message scheduler started ✓");
 };

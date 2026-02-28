@@ -220,7 +220,7 @@ MOVIE MATCHING RULES:
   // Recent conversation context for the LLM
   const recentConvo = history
     .slice(-6)
-    .map((m) => `${m.role === "user" ? user.name : "Mendi"}: ${m.message}`)
+    .map((m) => `${m.role === "user" ? user.name : "Sahaay"}: ${m.message}`)
     .join("\n");
 
   const response = await llm.invoke([
@@ -345,7 +345,7 @@ const buildRecommendationEmail = (
 <head>
   <meta charset="utf-8"/>
   <meta name="viewport" content="width=device-width,initial-scale=1.0"/>
-  <title>Mendi</title>
+  <title>Sahaay</title>
 </head>
 <body style="margin:0;padding:0;background:#06090f;font-family:Helvetica,Arial,sans-serif;-webkit-font-smoothing:antialiased;">
 <table width="100%" cellpadding="0" cellspacing="0" role="presentation" style="background:#06090f;padding:52px 20px 64px;">
@@ -355,7 +355,7 @@ const buildRecommendationEmail = (
 
         <tr>
           <td style="padding:0 4px 24px;">
-            <span style="font-size:11px;font-weight:800;letter-spacing:4px;text-transform:uppercase;color:${accent.from};">MENDI</span>
+            <span style="font-size:11px;font-weight:800;letter-spacing:4px;text-transform:uppercase;color:${accent.from};">Sahaay</span>
           </td>
         </tr>
 
@@ -416,7 +416,7 @@ const buildRecommendationEmail = (
                 <td style="padding:32px 44px 40px;">
                   <a href="${replyUrl}"
                      style="display:inline-block;color:${accent.text};text-decoration:none;font-size:13px;font-weight:600;letter-spacing:0.3px;border-bottom:1px solid ${accent.text};padding-bottom:2px;font-family:Helvetica,Arial,sans-serif;">
-                    reply to mendi →
+                    reply to Sahaay →
                   </a>
                 </td>
               </tr>
@@ -429,7 +429,7 @@ const buildRecommendationEmail = (
           <td style="padding:24px 4px 0;">
             <table width="100%" cellpadding="0" cellspacing="0">
               <tr>
-                <td><p style="margin:0;color:#1e293b;font-size:11px;">from your friend at mendi 💛</p></td>
+                <td><p style="margin:0;color:#1e293b;font-size:11px;">from your friend at Sahaay 💛</p></td>
                 <td align="right"><a href="${appUrl}/home" style="color:#1e293b;font-size:11px;text-decoration:none;">open app</a></td>
               </tr>
             </table>

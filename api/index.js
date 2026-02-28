@@ -5,7 +5,7 @@ import express from "express";
 import authRouter from "./routes/user.routes.js";
 import genAiRouter from "./routes/genAi.routes.js";
 
-const PORT = process.env.PORT || 3000;
+const PORT = process.env.PORT || 5000;
 const app = express();
 
 app.use(cors({ origin: process.env.FRONTEND_URL, credentials: true }));

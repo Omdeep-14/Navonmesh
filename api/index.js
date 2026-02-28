@@ -8,7 +8,22 @@ import genAiRouter from "./routes/genAi.routes.js";
 const PORT = process.env.PORT || 5000;
 const app = express();
 
-app.use(cors({ origin: process.env.FRONTEND_URL, credentials: true }));
+app.use(
+  cors({
+    origin: (origin, callback) => {
+      if (
+        !origin ||
+        origin.includes("vercel.app") ||
+        origin.includes("localhost")
+      ) {
+        callback(null, true);
+      } else {
+        callback(new Error("Not allowed by CORS"));
+      }
+    },
+    credentials: true,
+  }),
+);
 app.use(express.json());
 app.use("/api/v1/auth", authRouter);
 app.use("/api/v1", genAiRouter);

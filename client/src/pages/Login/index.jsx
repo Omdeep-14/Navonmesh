@@ -105,32 +105,10 @@ function Login({ onNavigate }) {
           }}
         >
           <button
-            onClick={() => onNavigate("login")}
-            style={{
-              background: "transparent",
-              border: "1.5px solid rgba(255,255,255,0.2)",
-              borderRadius: "12px",
-              padding: "8px 18px",
-              color: "#e2e8f0",
-              fontSize: "14px",
-              fontWeight: 500,
-              cursor: "pointer",
-              backdropFilter: "blur(8px)",
-              WebkitBackdropFilter: "blur(8px)",
-              transition: "all 0.2s ease",
-            }}
-            onMouseEnter={(e) => {
-              e.currentTarget.style.background = "rgba(255,255,255,0.1)";
-              e.currentTarget.style.borderColor = "rgba(255,255,255,0.35)";
-              e.currentTarget.style.color = "#fff";
-            }}
-            onMouseLeave={(e) => {
-              e.currentTarget.style.background = "transparent";
-              e.currentTarget.style.borderColor = "rgba(255,255,255,0.2)";
-              e.currentTarget.style.color = "#e2e8f0";
-            }}
+            className="glass-tab glass-tab-active"
+            style={{ flex: 1, minWidth: 0 }}
           >
-            Sign in
+            Login
           </button>
           <button
             className="glass-tab glass-tab-inactive"
@@ -188,15 +166,45 @@ function Login({ onNavigate }) {
           <div className="pt-1" style={{ width: "100%" }}>
             <button
               type="submit"
-              disabled={loading}
-              className="mendi-btn mendi-btn-amber mendi-btn-block"
               style={{
+                all: "unset",
+                boxSizing: "border-box",
+                display: "inline-flex",
+                alignItems: "center",
                 justifyContent: "center",
                 width: "100%",
-                boxSizing: "border-box",
+                padding: "0.55em 1.8em",
+                border: "0.12em solid #fbbf24",
+                borderRadius: "0.3em",
+                background: "transparent",
+                color: "#fbbf24",
+                fontFamily: "Inter, sans-serif",
+                fontSize: "0.9rem",
+                fontWeight: 600,
+                cursor: "pointer",
+                whiteSpace: "nowrap",
+                letterSpacing: "0.01em",
+                transition:
+                  "background-color 250ms ease, color 250ms ease, transform 200ms ease, box-shadow 250ms ease",
+              }}
+              onMouseEnter={(e) => {
+                e.currentTarget.style.backgroundColor = "#fbbf24";
+                e.currentTarget.style.color = "#0f172a";
+                e.currentTarget.style.transform = "translateY(-2px)";
+                e.currentTarget.style.boxShadow = "0 6px 20px rgba(0,0,0,0.25)";
+              }}
+              onMouseLeave={(e) => {
+                e.currentTarget.style.backgroundColor = "transparent";
+                e.currentTarget.style.color = "#fbbf24";
+                e.currentTarget.style.transform = "translateY(0)";
+                e.currentTarget.style.boxShadow = "none";
+              }}
+              onMouseDown={(e) => {
+                e.currentTarget.style.transform = "translateY(0)";
+                e.currentTarget.style.boxShadow = "none";
               }}
             >
-              <span>{loading ? "Signing you in..." : "Sign In →"}</span>
+              <span>Continue →</span>
             </button>
           </div>
         </form>

@@ -105,10 +105,32 @@ function Login({ onNavigate }) {
           }}
         >
           <button
-            className="glass-tab glass-tab-active"
-            style={{ flex: 1, minWidth: 0 }}
+            onClick={() => onNavigate("login")}
+            style={{
+              background: "transparent",
+              border: "1.5px solid rgba(255,255,255,0.2)",
+              borderRadius: "12px",
+              padding: "8px 18px",
+              color: "#e2e8f0",
+              fontSize: "14px",
+              fontWeight: 500,
+              cursor: "pointer",
+              backdropFilter: "blur(8px)",
+              WebkitBackdropFilter: "blur(8px)",
+              transition: "all 0.2s ease",
+            }}
+            onMouseEnter={(e) => {
+              e.currentTarget.style.background = "rgba(255,255,255,0.1)";
+              e.currentTarget.style.borderColor = "rgba(255,255,255,0.35)";
+              e.currentTarget.style.color = "#fff";
+            }}
+            onMouseLeave={(e) => {
+              e.currentTarget.style.background = "transparent";
+              e.currentTarget.style.borderColor = "rgba(255,255,255,0.2)";
+              e.currentTarget.style.color = "#e2e8f0";
+            }}
           >
-            Login
+            Sign in
           </button>
           <button
             className="glass-tab glass-tab-inactive"
